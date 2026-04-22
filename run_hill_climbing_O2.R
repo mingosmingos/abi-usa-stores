@@ -1,97 +1,138 @@
 ################################################################################
-# run_hill_climbing_O2.R
-# Script principal: Hill Climbing para O2 (max lucro com restrição de ≤10000 units)
+# run_hill_climbing_O2_melhorado.R
+# Hill Climbing para O2 com solução inicial heurística e melhor exploração
 ################################################################################
 
-# Limpar ambiente
 rm(list = ls())
-
-# Carregar função auxiliar do hill climbing
 source("hill.R")
+source("eval_plan_O2.R")  # já contém repair_solution_inplace e eval_plan_O2
 
-# Carregar função de avaliação O2
-source("eval_plan_O2.R")
-
-# 1. CARREGAR PREVISÕES
-cat("Carregando previsões...\n")
 forecasts <- read.csv("forecasts_var_final.csv")
 forecasts$Week_Start <- as.Date(forecasts$Week_Start)
+week_id <- 20
+max_sales_units <- 10000
 
-# Ver semanas disponíveis
-semanas_disponiveis <- unique(forecasts$Week_ID)
-cat("Semanas disponíveis:", paste(semanas_disponiveis, collapse = ", "), "\n")
+# ----------------------------------------------------------------------
+# 1. Cálculo de limites superiores (mais generosos, mas ainda realistas)
+# ----------------------------------------------------------------------
+store_names <- c("baltimore", "lancaster", "philadelphia", "richmond")
+max_J_dynamic <- numeric(28)
+max_X_dynamic <- numeric(28)
 
-# 2. CONFIGURAÇÕES
-week_id <- 20              # Semana a otimizar (1 a 20)
-max_J <- 50                # Máximo de Juniors por dia/loja
-max_X <- 30                # Máximo de Experts por dia/loja
-max_sales_units <- 10000   # Limite máximo de unidades vendidas (O2)
-max_iter <- 5000           # Número de iterações do Hill Climbing
-report_every <- 500        # Reportar a cada N iterações
-seed <- 123                # Semente para reprodutibilidade
-
-# 3. DEFINIR LIMITES
-# Ordem: [J1..J28, X1..X28, PR1..PR28]
-lower <- rep(0, 84)
-upper <- c(rep(max_J, 28), rep(max_X, 28), rep(0.30, 28))
-
-# 4. FUNÇÃO DE MUDANÇA (perturbação multiplicativa)
-change_fn <- function(par, lower, upper) {
-  hchange(par, lower = lower, upper = upper, operator = "*", 
-          dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
-}
-
-# 5. FUNÇÃO DE AVALIAÇÃO (fechamento)
-eval_fn <- function(sol) {
-  eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, 
-               max_sales_units = max_sales_units, verbose = FALSE)
-}
-
-# 6. SOLUÇÃO INICIAL ALEATÓRIA
-set.seed(seed)
-s0 <- runif(84, min = lower, max = upper)
-
-# 7. EXECUTAR HILL CLIMBING
-cat("\n=== Executando Hill Climbing para O2 ===\n")
-cat("Semana:", week_id, "\n")
-cat("Restrição: unidades vendidas ≤", max_sales_units, "\n")
-cat("Iterações máximas:", max_iter, "\n")
-cat("Limites: J ≤", max_J, ", X ≤", max_X, ", PR ≤ 0.30\n\n")
-
-hc <- hclimbing(par = s0, fn = eval_fn, change = change_fn,
-                lower = lower, upper = upper, type = "max",
-                control = list(maxit = max_iter, REPORT = report_every, digits = 2))
-
-# 8. RESULTADOS
-cat("\n=== MELHOR SOLUÇÃO ENCONTRADA ===\n")
-cat("Lucro total: $", round(hc$eval, 2), "\n")
-cat("(Restrição de", max_sales_units, "unidades aplicada)\n\n")
-
-# Extrair e mostrar o plano para cada loja
-best_sol <- hc$sol
-dim(best_sol) <- c(4, 7, 3)
-
-store_names <- c("Baltimore", "Lancaster", "Philadelphia", "Richmond")
-
+idx <- 1
 for(s in 1:4) {
-  cat("\n", store_names[s], ":\n", sep="")
-  cat("     Dia  |  J  |  X  |   PR  \n")
-  cat("     -----|-----|-----|-------\n")
+  fc_store <- forecasts[forecasts$Store == store_names[s] & forecasts$Week_ID == week_id, ]
   for(d in 1:7) {
-    J_val <- round(best_sol[s, d, 1])
-    X_val <- round(best_sol[s, d, 2])
-    PR_val <- round(best_sol[s, d, 3], 3)
-    cat(sprintf("       %d   | %3d | %3d | %.3f\n", d, J_val, X_val, PR_val))
+    C_pred <- fc_store$Forecast[fc_store$Day == d]
+    # Limites mais folgados: máximo de HR que conseguem atender 150% dos clientes previstos
+    max_J_dynamic[idx] <- ceiling(C_pred * 1.5 / 6)
+    max_X_dynamic[idx] <- ceiling(C_pred * 1.5 / 7)
+    idx <- idx + 1
   }
 }
 
-# 9. DETALHES DO LUCRO (com verificação da restrição)
-cat("\n=== DETALHES DO LUCRO POR LOJA/DIA (com verificação da restrição) ===\n")
-eval_plan_O2(hc$sol, forecasts = forecasts, week_id = week_id, 
-             max_sales_units = max_sales_units, verbose = TRUE)
+max_J <- pmin(max_J_dynamic, 40)  # teto absoluto
+max_X <- pmin(max_X_dynamic, 25)
+max_PR <- rep(0.30, 28)
 
-# 10. GUARDAR RESULTADOS
-saveRDS(hc, file = paste0("resultado_O2_semana_", week_id, ".rds"))
-cat("\nResultado guardado em: resultado_O2_semana_", week_id, ".rds\n")
+lower <- rep(0, 84)
+upper <- c(max_J, max_X, max_PR)
 
-cat("\n=== FIM ===\n")
+cat("Limites dinâmicos (exemplo Baltimore, primeiros 5 dias):\n")
+fc_balt <- forecasts[forecasts$Store == "baltimore" & forecasts$Week_ID == week_id, ]
+for(d in 1:5) cat(sprintf("Dia %d: C_pred=%3.0f -> J_max=%2d, X_max=%2d\n", 
+                          d, fc_balt$Forecast[d], max_J[d], max_X[d]))
+
+# ----------------------------------------------------------------------
+# 2. Solução inicial heurística (inteligente) - já dá lucro positivo
+# ----------------------------------------------------------------------
+s0 <- rep(0, 84)
+dim(s0) <- c(4,7,3)
+
+for(s in 1:4) {
+  store <- store_names[s]
+  fc_store <- forecasts[forecasts$Store == store & forecasts$Week_ID == week_id, ]
+  for(d in 1:7) {
+    C_pred <- fc_store$Forecast[d]
+    # Heurística: usar X para atender a maioria, J para o resto
+    X_heur <- floor(C_pred / 7)
+    rest <- C_pred - 7*X_heur
+    J_heur <- ceiling(rest / 6)
+    if(J_heur < 0) J_heur <- 0
+    # Evitar excesso de HR (já que temos restrição de unidades)
+    X_heur <- min(X_heur, max_X[(s-1)*7 + d])
+    J_heur <- min(J_heur, max_J[(s-1)*7 + d])
+    s0[s, d, 1] <- J_heur
+    s0[s, d, 2] <- X_heur
+    s0[s, d, 3] <- 0.15   # promoção média
+  }
+}
+s0 <- c(s0)  # voltar a vetor
+
+# Reparar a solução inicial para garantir que cumpre a restrição (se necessário)
+s0 <- repair_solution_inplace(s0, forecasts, week_id, max_sales_units)
+
+# Avaliar lucro da solução inicial
+profit_init <- eval_plan_O2(s0, forecasts, week_id, max_sales_units, verbose = FALSE)
+cat(sprintf("\nLucro da solução inicial (heurística): $%.2f\n", profit_init))
+
+# ----------------------------------------------------------------------
+# 3. Função de mudança mais agressiva (exploração)
+# ----------------------------------------------------------------------
+change_fn_explore <- function(par, lower, upper) {
+  new_par <- par
+  for(i in 1:length(par)) {
+    if(runif(1) < 0.3) {  # 30% das vezes muda
+      if(par[i] == 0) {
+        new_par[i] <- runif(1, 0, upper[i]*0.2)
+      } else {
+        # Perturbação multiplicativa com sd maior (0.1) para saltos maiores
+        factor <- rnorm(1, mean = 1, sd = 0.1)
+        new_par[i] <- par[i] * factor
+      }
+      new_par[i] <- min(upper[i], max(lower[i], new_par[i]))
+    }
+  }
+  return(new_par)
+}
+
+# ----------------------------------------------------------------------
+# 4. Executar Hill Climbing com muitas iterações
+# ----------------------------------------------------------------------
+eval_fn <- function(sol) {
+  eval_plan_O2(sol, forecasts, week_id, max_sales_units, verbose = FALSE)
+}
+
+cat("\n=== Hill Climbing para O2 (solução heurística + exploração) ===\n")
+set.seed(123)
+hc <- hclimbing(par = s0, fn = eval_fn, change = change_fn_explore,
+                lower = lower, upper = upper, type = "max",
+                control = list(maxit = 10000, REPORT = 1000, digits = 2))
+
+# ----------------------------------------------------------------------
+# 5. Resultados
+# ----------------------------------------------------------------------
+cat("\n=== MELHOR SOLUÇÃO ENCONTRADA ===\n")
+cat("Lucro total: $", round(hc$eval, 2), "\n\n")
+
+best_sol <- hc$sol
+dim(best_sol) <- c(4,7,3)
+
+store_names_print <- c("Baltimore", "Lancaster", "Philadelphia", "Richmond")
+for(s in 1:4) {
+  cat("\n", store_names_print[s], ":\n")
+  cat(" Dia |  J  |  X  |   PR  \n")
+  cat("-----|-----|-----|-------\n")
+  for(d in 1:7) {
+    Jv <- round(best_sol[s,d,1])
+    Xv <- round(best_sol[s,d,2])
+    PRv <- round(best_sol[s,d,3], 3)
+    cat(sprintf("  %2d | %3d | %3d | %.3f\n", d, Jv, Xv, PRv))
+  }
+}
+
+cat("\n=== VERIFICAÇÃO FINAL (verbose) ===\n")
+eval_plan_O2(hc$sol, forecasts, week_id, max_sales_units, verbose = TRUE)
+
+saveRDS(hc, file = "resultado_O2_melhorado.rds")
+cat("\nResultado guardado em resultado_O2_melhorado.rds\n")

@@ -1,103 +1,137 @@
 ################################################################################
 # run_hill_climbing_O3.R
-# Script principal: Hill Climbing para O3 (multiobjetivo)
-# Maximizar lucro e minimizar HR simultaneamente
+# Hill Climbing para O3 (maximizar profit - weight_hr * HR) com restrição ≤10000 units
+# Inclui solução inicial heurística, limites dinâmicos e reparação
 ################################################################################
 
-# Limpar ambiente
 rm(list = ls())
-
-# Carregar função auxiliar do hill climbing
 source("hill.R")
+source("eval_plan_O3.R")   # contém eval_plan_O3 e repair_solution_inplace
 
-# Carregar função de avaliação O3
-source("eval_plan_O3.R")
-
-# 1. CARREGAR PREVISÕES
-cat("Carregando previsões...\n")
+# Carregar previsões
 forecasts <- read.csv("forecasts_var_final.csv")
 forecasts$Week_Start <- as.Date(forecasts$Week_Start)
+week_id <- 20
+max_sales_units <- 10000
+weight_hr <- 10            # peso para minimizar HR (ajustável)
 
-# Ver semanas disponíveis
-semanas_disponiveis <- unique(forecasts$Week_ID)
-cat("Semanas disponíveis:", paste(semanas_disponiveis, collapse = ", "), "\n")
-
-# 2. CONFIGURAÇÕES
-week_id <- 20              # Semana a otimizar (1 a 20)
-max_J <- 50                # Máximo de Juniors por dia/loja
-max_X <- 30                # Máximo de Experts por dia/loja
-max_sales_units <- 10000   # Limite máximo de unidades vendidas (herdado do O2)
-weight_hr <- 10            # Peso para minimizar HR (quanto maior, mais importante)
-max_iter <- 5000           # Número de iterações do Hill Climbing
-report_every <- 500        # Reportar a cada N iterações
-seed <- 123                # Semente para reprodutibilidade
-
-# 3. DEFINIR LIMITES
-# Ordem: [J1..J28, X1..X28, PR1..PR28]
-lower <- rep(0, 84)
-upper <- c(rep(max_J, 28), rep(max_X, 28), rep(0.30, 28))
-
-# 4. FUNÇÃO DE MUDANÇA (perturbação multiplicativa)
-change_fn <- function(par, lower, upper) {
-  hchange(par, lower = lower, upper = upper, operator = "*", 
-          dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
-}
-
-# 5. FUNÇÃO DE AVALIAÇÃO (fechamento)
-eval_fn <- function(sol) {
-  eval_plan_O3(sol, forecasts = forecasts, week_id = week_id, 
-               max_sales_units = max_sales_units, 
-               weight_hr = weight_hr,
-               verbose = FALSE)
-}
-
-# 6. SOLUÇÃO INICIAL ALEATÓRIA
-set.seed(seed)
-s0 <- runif(84, min = lower, max = upper)
-
-# 7. EXECUTAR HILL CLIMBING
-cat("\n=== Executando Hill Climbing para O3 (Multiobjetivo) ===\n")
-cat("Semana:", week_id, "\n")
-cat("Objetivo: Maximizar (Lucro -", weight_hr, "× Total_HR)\n")
-cat("Restrição: unidades vendidas ≤", max_sales_units, "\n")
-cat("Iterações máximas:", max_iter, "\n")
-cat("Limites: J ≤", max_J, ", X ≤", max_X, ", PR ≤ 0.30\n\n")
-
-hc <- hclimbing(par = s0, fn = eval_fn, change = change_fn,
-                lower = lower, upper = upper, type = "max",
-                control = list(maxit = max_iter, REPORT = report_every, digits = 2))
-
-# 8. RESULTADOS
-cat("\n=== MELHOR SOLUÇÃO ENCONTRADA ===\n")
-cat("Valor da função objetivo (profit -", weight_hr, "* HR):", round(hc$eval, 2), "\n\n")
-
-# Extrair e mostrar o plano para cada loja
-best_sol <- hc$sol
-dim(best_sol) <- c(4, 7, 3)
-
-store_names <- c("Baltimore", "Lancaster", "Philadelphia", "Richmond")
-
+# ------------------------------------------------------------
+# 1. Limites dinâmicos (baseados nas previsões)
+# ------------------------------------------------------------
+store_names <- c("baltimore", "lancaster", "philadelphia", "richmond")
+max_J <- numeric(28)
+max_X <- numeric(28)
+idx <- 1
 for(s in 1:4) {
-  cat("\n", store_names[s], ":\n", sep="")
-  cat("     Dia  |  J  |  X  |   PR  \n")
-  cat("     -----|-----|-----|-------\n")
+  fc_store <- forecasts[forecasts$Store == store_names[s] & forecasts$Week_ID == week_id, ]
   for(d in 1:7) {
-    J_val <- round(best_sol[s, d, 1])
-    X_val <- round(best_sol[s, d, 2])
-    PR_val <- round(best_sol[s, d, 3], 3)
-    cat(sprintf("       %d   | %3d | %3d | %.3f\n", d, J_val, X_val, PR_val))
+    C_pred <- fc_store$Forecast[d]
+    max_J[idx] <- min(ceiling(C_pred * 1.5 / 6), 40)
+    max_X[idx] <- min(ceiling(C_pred * 1.5 / 7), 25)
+    idx <- idx + 1
+  }
+}
+max_PR <- rep(0.30, 28)
+lower <- rep(0, 84)
+upper <- c(max_J, max_X, max_PR)
+
+cat("Limites dinâmicos para O3 (exemplo Baltimore):\n")
+fc_balt <- forecasts[forecasts$Store == "baltimore" & forecasts$Week_ID == week_id, ]
+for(d in 1:5) cat(sprintf("Dia %d: C_pred=%3.0f -> J_max=%2d, X_max=%2d\n", 
+                          d, fc_balt$Forecast[d], max_J[d], max_X[d]))
+
+# ------------------------------------------------------------
+# 2. Solução inicial heurística (maximiza atendimento, sem excesso)
+# ------------------------------------------------------------
+s0 <- rep(0, 84)
+dim(s0) <- c(4,7,3)
+for(s in 1:4) {
+  fc_store <- forecasts[forecasts$Store == store_names[s] & forecasts$Week_ID == week_id, ]
+  for(d in 1:7) {
+    C_pred <- fc_store$Forecast[d]
+    X_heur <- floor(C_pred / 7)
+    rest <- C_pred - 7*X_heur
+    J_heur <- ceiling(rest / 6)
+    if(J_heur < 0) J_heur <- 0
+    X_heur <- min(X_heur, max_X[(s-1)*7 + d])
+    J_heur <- min(J_heur, max_J[(s-1)*7 + d])
+    s0[s, d, 1] <- J_heur
+    s0[s, d, 2] <- X_heur
+    s0[s, d, 3] <- 0.15   # promoção média
+  }
+}
+s0 <- c(s0)
+s0 <- repair_solution_inplace(s0, forecasts, week_id, max_sales_units)
+
+# Avaliar valor da solução inicial (para referência)
+init_obj <- eval_plan_O3(s0, forecasts, week_id, max_sales_units, weight_hr, verbose = FALSE)
+cat(sprintf("\nValor inicial da função objetivo (profit - %.1f*HR): %.2f\n", weight_hr, init_obj))
+
+# ------------------------------------------------------------
+# 3. Função de mudança mista (exploração)
+# ------------------------------------------------------------
+change_fn_mixed <- function(par, lower, upper) {
+  new_par <- par
+  for(i in 1:length(par)) {
+    if(runif(1) < 0.3) {
+      if(par[i] == 0) {
+        new_par[i] <- runif(1, 0, upper[i]*0.2)
+      } else {
+        factor <- rnorm(1, mean = 1, sd = 0.1)
+        new_par[i] <- par[i] * factor
+      }
+      new_par[i] <- min(upper[i], max(lower[i], new_par[i]))
+    }
+  }
+  return(new_par)
+}
+
+# ------------------------------------------------------------
+# 4. Função de avaliação (fechamento)
+# ------------------------------------------------------------
+eval_fn <- function(sol) {
+  eval_plan_O3(sol, forecasts, week_id, max_sales_units, weight_hr, verbose = FALSE)
+}
+
+# ------------------------------------------------------------
+# 5. Executar Hill Climbing
+# ------------------------------------------------------------
+cat("\n=== Hill Climbing para O3 (multiobjetivo) ===\n")
+cat(sprintf("Objetivo: Maximizar (profit - %.1f * total_HR)\n", weight_hr))
+cat(sprintf("Restrição: unidades totais ≤ %d\n", max_sales_units))
+cat("Limites dinâmicos ativos\n\n")
+
+set.seed(123)
+hc <- hclimbing(par = s0, fn = eval_fn, change = change_fn_mixed,
+                lower = lower, upper = upper, type = "max",
+                control = list(maxit = 8000, REPORT = 1000, digits = 2))
+
+# ------------------------------------------------------------
+# 6. Resultados
+# ------------------------------------------------------------
+cat("\n=== MELHOR SOLUÇÃO ENCONTRADA ===\n")
+cat(sprintf("Valor da função objetivo (profit - %.1f*HR): %.2f\n", weight_hr, hc$eval))
+
+# Avaliar detalhadamente a melhor solução
+cat("\n--- Detalhes da melhor solução ---\n")
+eval_plan_O3(hc$sol, forecasts, week_id, max_sales_units, weight_hr, verbose = TRUE)
+
+# Mostrar plano por loja/dia
+best_sol <- hc$sol
+dim(best_sol) <- c(4,7,3)
+store_names_print <- c("Baltimore", "Lancaster", "Philadelphia", "Richmond")
+for(s in 1:4) {
+  cat("\n", store_names_print[s], ":\n")
+  cat(" Dia |  J  |  X  |   PR  \n")
+  cat("-----|-----|-----|-------\n")
+  for(d in 1:7) {
+    Jv <- round(best_sol[s,d,1])
+    Xv <- round(best_sol[s,d,2])
+    PRv <- round(best_sol[s,d,3], 3)
+    cat(sprintf("  %2d | %3d | %3d | %.3f\n", d, Jv, Xv, PRv))
   }
 }
 
-# 9. DETALHES DO LUCRO E HR (com verificação da restrição)
-cat("\n=== DETALHES DO LUCRO POR LOJA/DIA ===\n")
-eval_plan_O3(hc$sol, forecasts = forecasts, week_id = week_id, 
-             max_sales_units = max_sales_units, 
-             weight_hr = weight_hr,
-             verbose = TRUE)
-
-# 10. GUARDAR RESULTADOS
-saveRDS(hc, file = paste0("resultado_O3_semana_", week_id, ".rds"))
-cat("\nResultado guardado em: resultado_O3_semana_", week_id, ".rds\n")
-
-cat("\n=== FIM ===\n")
+# Guardar resultados
+saveRDS(hc, file = paste0("resultado_O3_semana_", week_id, "_peso_", weight_hr, ".rds"))
+cat("\nResultado guardado.\n")
