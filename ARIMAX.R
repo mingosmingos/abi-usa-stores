@@ -41,7 +41,7 @@ p <- ggplot(df_plot, aes(x = Data)) +
   geom_line(aes(y = Real, color = "Real"), size = 1) +
   geom_line(aes(y = Previsto, color = "Previsto"), size = 1, linetype = "dashed") +
   labs(
-    title = "ARIMA",
+    title = "ARIMAX",
     x = "Data", y = "Clientes",
     color = "Legenda"
   ) +
