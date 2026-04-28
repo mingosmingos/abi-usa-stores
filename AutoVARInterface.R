@@ -6,6 +6,7 @@ call_autovar <- function(dataset) {
   dataset$TouristEvent <- ifelse(dataset$TouristEvent == "Yes", 1, 0)
   dataset <- na.omit(dataset)
   N <- nrow(dataset)
+  dataset <- ts(dataset, frequency = 7)
   
   # 2. Holdout split (80/20)
   TRAINING <- dataset[1:floor(N * 0.8), ]
