@@ -60,6 +60,20 @@ predictions_df <- data.frame(
   Sales         = unlist(lapply(predictions, `[[`, 2))
 )
 
+# Calculating metrics
+
+print(round(mmetric(
+  y      = actual_df$Num_Customers,
+  x      = predictions_df$Num_Customers,
+  metric = "ALL"
+)))
+
+metrics = round(mmetric(
+  y      = actual_df$Num_Customers,
+  x      = predictions_df$Num_Customers,
+  metric = "ALL"
+))
+
 # Plot using base R
 par(mfrow = c(1, 2))
 
