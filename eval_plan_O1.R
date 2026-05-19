@@ -87,7 +87,7 @@ eval_plan_O1 <- function(sol, forecasts, week_id, verbose = FALSE) {
       total_hr <- total_hr + J + X
       
       if(verbose) {
-        cat(sprintf("%s dia %d: J=%d X=%d PR=%.3f C_pred=%.0f A=%d units=%d rev=%.0f cost=%.0f profit=%.0f\n",
+        cat(sprintf("%s dia %d: J=%.0f X=%.0f PR=%.3f C_pred=%.0f A=%.0f units=%.0f rev=%.0f cost=%.0f profit=%.0f\n",
                     store, d, J, X, PR, C_pred, A, daily_sales_units, daily_revenue, 
                     daily_cost_hr, daily_net_profit))
       }

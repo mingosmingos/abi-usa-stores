@@ -14,11 +14,22 @@ source("eval_plan_O1.R")
 
 # 1. CARREGAR PREVISÕES
 cat("Carregando previsões...\n")
-forecasts <- read.csv("all_store_predictions.csv")
-forecasts$Week_Start <- as.Date(forecasts$Week_Start)
+raw <- read.csv("all_store_predictions.csv")
+
+# Mapear colunas do CSV para o formato esperado pela eval_plan_O1:
+#   Run           -> Week_ID   (semana, 1..104)
+#   Step          -> Day       (dia da semana, 1..7)
+#   Num_Customers -> Forecast  (previsão de clientes)
+#   Store         -> Store     (nome da loja, sem alteração)
+forecasts <- data.frame(
+  Store    = raw$Store,
+  Week_ID  = raw$Run,
+  Day      = raw$Step,
+  Forecast = raw$Num_Customers
+)
 
 # Ver semanas disponíveis
-semanas_disponiveis <- unique(forecasts$Week_ID)
+semanas_disponiveis <- sort(unique(forecasts$Week_ID))
 cat("Semanas disponíveis:", paste(semanas_disponiveis, collapse = ", "), "\n")
 
 # 2. CONFIGURAÇÕES
