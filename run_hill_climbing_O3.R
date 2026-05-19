@@ -9,8 +9,19 @@ source("hill.R")
 source("eval_plan_O3.R")   # contém eval_plan_O3 e repair_solution_inplace
 
 # Carregar previsões
-forecasts <- read.csv("forecasts_var_final.csv")
-forecasts$Week_Start <- as.Date(forecasts$Week_Start)
+raw <- read.csv("all_store_predictions.csv")
+
+# Mapear colunas do CSV para o formato esperado pela eval_plan_O3:
+#   Run           -> Week_ID   (semana, 1..104)
+#   Step          -> Day       (dia da semana, 1..7)
+#   Num_Customers -> Forecast  (previsão de clientes)
+#   Store         -> Store     (nome da loja, sem alteração)
+forecasts <- data.frame(
+  Store    = raw$Store,
+  Week_ID  = raw$Run,
+  Day      = raw$Step,
+  Forecast = raw$Num_Customers
+)
 week_id <- 20
 max_sales_units <- 10000
 weight_hr <- 10            # peso para minimizar HR (ajustável)

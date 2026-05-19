@@ -119,7 +119,7 @@ eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
       max_assisted <- 7 * X + 6 * J
       A <- min(max_assisted, C_pred)
       
-      is_weekend <- (d %in% c(6,7))
+      is_weekend <- (d %in% c(1, 7))
       cost_J <- ifelse(is_weekend, hr_cost_J_weekend, hr_cost_J_weekday)
       cost_X <- ifelse(is_weekend, hr_cost_X_weekend, hr_cost_X_weekday)
       daily_cost_hr <- J * cost_J + X * cost_X
@@ -128,28 +128,29 @@ eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
       n_assisted_by_J <- A - n_assisted_by_X
       
       daily_sales_units <- 0
-      daily_revenue <- 0
+      daily_revenue_raw <- 0
       
       if(n_assisted_by_X > 0) {
         U_X <- round(F_X[s] * 10 / log(2 - PR))
-        P_X <- round(U_X * (1 - PR) * 1.07)
+        P_X_raw <- U_X * (1 - PR) * 1.07
         daily_sales_units <- daily_sales_units + n_assisted_by_X * U_X
-        daily_revenue <- daily_revenue + n_assisted_by_X * P_X
+        daily_revenue_raw <- daily_revenue_raw + n_assisted_by_X * P_X_raw
       }
       if(n_assisted_by_J > 0) {
         U_J <- round(F_J[s] * 10 / log(2 - PR))
-        P_J <- round(U_J * (1 - PR) * 1.07)
+        P_J_raw <- U_J * (1 - PR) * 1.07
         daily_sales_units <- daily_sales_units + n_assisted_by_J * U_J
-        daily_revenue <- daily_revenue + n_assisted_by_J * P_J
+        daily_revenue_raw <- daily_revenue_raw + n_assisted_by_J * P_J_raw
       }
       
+      daily_revenue <- round(daily_revenue_raw)
       daily_net_profit <- daily_revenue - daily_cost_hr
       weekly_profit <- weekly_profit + daily_net_profit
       total_sales_units <- total_sales_units + daily_sales_units
       total_hr <- total_hr + J + X
       
       if(verbose) {
-        cat(sprintf("%s dia %d: J=%d X=%d PR=%.3f pred=%.0f A=%d units=%d rev=%.0f cost=%.0f profit=%.0f\n",
+        cat(sprintf("%s dia %d: J=%.0f X=%.0f PR=%.3f pred=%.0f A=%.0f units=%.0f rev=%.0f cost=%.0f profit=%.0f\n",
                     store, d, J, X, PR, C_pred, A, daily_sales_units, daily_revenue, daily_cost_hr, daily_net_profit))
       }
     }
