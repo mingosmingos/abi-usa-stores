@@ -90,3 +90,13 @@ plot(actual_df$Sales, type = "l", col = "black",
 lines(predictions_df$Sales, col = "red", lty = 2)
 legend("topleft", legend = c("Actual", "Predicted"),
        col = c("black", "red"), lty = c(1, 2))
+
+# More holdout testing
+CasesSeriesObject <- CasesSeries(Num_Customers, timelags)
+timelags <- c(1:3, 7, 27)
+HoldoutObject <- holdout(CasesSeriesObject$y,
+                         ratio = 7,
+                         mode = "incremental",
+                         iter = 2,
+                         window = 7,
+                         increment = 2)
