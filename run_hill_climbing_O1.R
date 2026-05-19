@@ -14,7 +14,7 @@ source("eval_plan_O1.R")
 
 # 1. CARREGAR PREVISÕES
 cat("Carregando previsões...\n")
-forecasts <- read.csv("forecasts_var_final.csv")
+forecasts <- read.csv("all_store_predictions.csv")
 forecasts$Week_Start <- as.Date(forecasts$Week_Start)
 
 # Ver semanas disponíveis
