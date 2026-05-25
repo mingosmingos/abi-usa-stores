@@ -29,7 +29,7 @@ week_id      <- 20
 max_J        <- 50
 max_X        <- 30
 max_iter     <- 5000
-initial_temp <- 50          # SANN: initial temperature
+initial_temp <- 5          # SANN: initial temperature
 seed         <- 122
 
 # 3. DEFINIR LIMITES
@@ -46,8 +46,8 @@ sann_gr <- function(par) {
 # 5. AVALIAÇÃO (SANN MINIMIZES BY DEFAULT → negate profit)
 eval_fn_sann <- function(sol) {
   # Return negative profit so optim minimizes -profit == maximizes profit
-  -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
-  # -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  # -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
 }
 
 # 6. SOLUÇÃO INICIAL ALEATÓRIA
@@ -62,9 +62,30 @@ s0 <- runif(84, min = lower, max = upper)
 
 control_sann <- list(maxit = max_iter, temp = initial_temp, trace = TRUE, tmax = 30)
 
+# 5. CONVERGENCE TRACKING SETUP
+track <- new.env()
+track$iter <- 0
+track$current_val <- numeric(max_iter + 5)  # Pre-allocate safely
+track$best_val    <- numeric(max_iter + 5)
+
+# Wrapper that logs values while calling your original objective
+eval_fn_sann_trace <- function(sol) {
+  val <- eval_fn_sann(sol)
+  track$iter <- track$iter + 1
+  track$current_val[track$iter] <- val
+  
+  # Track best-so-far (SANN minimizes, so lower -profit = better)
+  if (track$iter == 1 || val < track$best_val[track$iter - 1]) {
+    track$best_val[track$iter] <- val
+  } else {
+    track$best_val[track$iter] <- track$best_val[track$iter - 1]
+  }
+  return(val)
+}
+
 # optim() minimizes by default. We pass the negated profit.
 sann_result <- optim(par = s0,
-                     fn = eval_fn_sann,
+                     fn = eval_fn_sann_trace,
                      gr = sann_gr,          # Neighborhood generator
                      method = "SANN",
                      control = control_sann)
@@ -98,3 +119,14 @@ eval_plan_O2(sann_result$par, forecasts = forecasts, week_id = week_id, verbose 
 saveRDS(sann_result, file = paste0("resultado_SANN_O1_semana_", week_id, ".rds"))
 cat("\nResultado guardado em: resultado_SANN_O1_semana_", week_id, ".rds\n")
 cat("\n=== FIM ===\n")
+
+valid_iters <- seq_len(track$iter)
+best_profits <- -track$best_val[valid_iters]  # Convert back to positive profit
+
+plot(valid_iters, best_profits, type = "l", col = "steelblue", lwd = 2,
+     xlab = "Iteration", ylab = "Best Profit Found (USD)",
+     main = "Simulated Annealing Convergence (O2)")
+abline(h = max(best_profits), col = "red", lty = 2)
+grid()
+legend("bottomright", legend = c("Best Profit", "Final Profit"),
+       col = c("steelblue", "red"), lty = c(1, 2), lwd = 2)

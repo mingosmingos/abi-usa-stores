@@ -25,7 +25,7 @@ semanas_disponiveis <- sort(unique(forecasts$Week_ID))
 cat("Semanas disponíveis:", paste(semanas_disponiveis, collapse = ", "), "\n")
 
 # 2. CONFIGURAÇÕES
-week_id      <- 20
+week_id      <- 21
 max_J        <- 50
 max_X        <- 30
 max_iter     <- 5000
@@ -43,11 +43,43 @@ sann_gr <- function(par) {
           dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
 }
 
+# --- INSERT BEFORE SECTION 5 ---
+# Initialize tracker for convergence plot
+tracker <- list(
+  iter = 0,
+  best_val = Inf,  # For minimization, start with +Inf
+  history = data.frame(iter = integer(), best_val = numeric())
+)
+
+# --- REPLACE SECTION 5 WITH THIS ---
 # 5. AVALIAÇÃO (SANN MINIMIZES BY DEFAULT → negate profit)
 eval_fn_sann <- function(sol) {
-  # Return negative profit so optim minimizes -profit == maximizes profit
-  -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
-  # -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  # 1. Calculate value (negative for minimization)
+  val <- -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, 
+                       max_sales_units = 10000, verbose = FALSE)
+  
+  # 2. Update Tracker
+  tracker$iter <<- tracker$iter + 1
+  
+  # We want to minimize 'val' (which is -profit), so we look for the lowest number
+  if(!is.na(val) && is.finite(val) && val < tracker$best_val) {
+    tracker$best_val <<- val
+  }
+  
+  # Store history - only if val is valid
+  if(!is.na(val) && is.finite(val)) {
+    new_row <- data.frame(iter = tracker$iter, best_val = tracker$best_val)
+    tracker$history <<- rbind(tracker$history, new_row)
+  }
+  
+  # Print progress every 500 iterations
+  if(tracker$iter %% 500 == 0) {
+    cat(sprintf("Iteration %d: current_val = %.2f, best_val = %.2f\n", 
+                tracker$iter, val, tracker$best_val))
+  }
+  
+  # 3. Return value for optim
+  return(val)
 }
 
 # 6. SOLUÇÃO INICIAL ALEATÓRIA
@@ -98,3 +130,29 @@ eval_plan_O2(sann_result$par, forecasts = forecasts, week_id = week_id, verbose 
 saveRDS(sann_result, file = paste0("resultado_SANN_O1_semana_", week_id, ".rds"))
 cat("\nResultado guardado em: resultado_SANN_O1_semana_", week_id, ".rds\n")
 cat("\n=== FIM ===\n")
+
+# --- ADD AT THE END OF FILE (SECTION 11) ---
+# 11. VISUALIZAÇÃO DA CONVERGÊNCIA (O2)
+cat("\n=== Gerando gráfico de convergência (O2) ===\n")
+
+if(nrow(tracker$history) > 0) {
+  df_plot <- tracker$history
+  # Flip sign back to positive profit for display
+  df_plot$Profit <- -df_plot$best_val
+  
+  plot(df_plot$iter, df_plot$Profit, 
+       type = "l", col = "steelblue", lwd = 2,
+       xlab = "Iteração", ylab = "Melhor Lucro Líquido (O2)", 
+       main = paste("Convergência SANN - O2 Semana", week_id),
+       ylim = c(min(df_plot$Profit) * 0.95, max(df_plot$Profit) * 1.05))
+  
+  grid()
+  best_profit <- max(df_plot$Profit)
+  abline(h = best_profit, lty = 2, col = "red")
+  text(x = nrow(df_plot) * 0.8, y = best_profit, 
+       labels = paste("Max:", round(best_profit, 2)), pos = 3, col = "red")
+  
+  cat("Gráfico gerado com sucesso.\n")
+} else {
+  cat("ERRO: Nenhum dado de iteração encontrado para plotar.\n")
+}
