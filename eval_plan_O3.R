@@ -93,7 +93,8 @@ repair_solution_inplace <- function(sol, forecasts, week_id, max_sales_units, ma
 
 # Função principal de avaliação para O3
 eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
-                         verbose = FALSE, max_J = NULL, max_X = NULL) {
+                         verbose = FALSE, max_J = NULL, max_X = NULL,
+                         alpha = 0.1, return_components = FALSE) {
   
   # Reparar solução (garante limites dinâmicos e restrição de unidades)
   sol_repaired <- repair_solution_inplace(sol, forecasts, week_id, max_sales_units, max_J, max_X)
@@ -174,16 +175,21 @@ eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
     cat("Total sales units:", total_sales_units, "/", max_sales_units, "\n")
     cat("Total HR (J+X):", total_hr, "\n")
     cat("Total profit: $", round(total_profit, 2), "\n")
-    cat(sprintf("Função objetivo (HR - profit * 0.1) = %.4f\n", total_hr - total_profit * 0.1))
+    cat(sprintf("Função objetivo (HR - profit * %.3f) = %.4f\n", alpha, total_hr - total_profit * alpha))
   }
   
   # Penalidade se exceder restrição de unidades
   if(total_sales_units > max_sales_units) return(-1e9)
   
+  # Se pedido, devolver componentes para o gráfico de Pareto
+  if(return_components) {
+    return(list(total_hr = total_hr, total_profit = total_profit,
+                total_sales_units = total_sales_units))
+  }
+  
   # Objetivo: minimizar HR (principal), maximizar lucro (secundário)
-  # Fórmula: HR - profit * 0.1
-  # O fator 0.1 equilibra HR e lucro: reduzir 1 pessoa de HR equivale a ganhar 10$ de lucro
+  # Fórmula: HR - profit * alpha
   # hill climbing maximiza, por isso retornamos o negativo
-  objective_value <- total_hr - total_profit * 0.1
+  objective_value <- total_hr - total_profit * alpha
   return(-objective_value)
 }
