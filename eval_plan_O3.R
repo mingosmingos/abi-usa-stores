@@ -1,13 +1,13 @@
 ################################################################################
 # eval_plan_O3.R
-# Função de avaliação para o objetivo O3 (multiobjetivo)
-# Minimizar HR penalizando lucro: objective = -profit * 0.1 + HR
-# Com restrição rígida de unidades vendidas ≤ max_sales_units
-# Inclui reparação automática de soluções inválidas
+# Função de avaliação para o objetivo O3
+# Objetivo: minimizar HR (critério principal) com lucro como critério secundário
+# Fórmula: objective = HR - profit * 0.1
+# O hill climbing maximiza, por isso retornamos o negativo: -(HR - profit * 0.1)
+# Restrição rígida: unidades vendidas <= max_sales_units
 ################################################################################
 
-# Função auxiliar de reparação (idêntica à usada no O2)
-repair_solution_inplace <- function(sol, forecasts, week_id, max_sales_units) {
+repair_solution_inplace <- function(sol, forecasts, week_id, max_sales_units, max_J = NULL, max_X = NULL) {
   dim(sol) <- c(4, 7, 3)
   
   store_names <- c("baltimore", "lancaster", "philadelphia", "richmond")
@@ -39,6 +39,10 @@ repair_solution_inplace <- function(sol, forecasts, week_id, max_sales_units) {
     for(d in 1:7) {
       J <- max(0, round(sol[s, d, 1]))
       X <- max(0, round(sol[s, d, 2]))
+      if(!is.null(max_J)) J <- min(J, max_J[(s-1)*7 + d])
+      if(!is.null(max_X)) X <- min(X, max_X[(s-1)*7 + d])
+      sol[s, d, 1] <- J
+      sol[s, d, 2] <- X
       PR <- min(0.30, max(0, sol[s, d, 3]))
       C_pred <- fc_store$Forecast[fc_store$Day == d]
       units <- calc_units_day(s, d, J, X, PR, C_pred)
@@ -49,7 +53,10 @@ repair_solution_inplace <- function(sol, forecasts, week_id, max_sales_units) {
   
   if(total_units <= max_sales_units) return(c(sol))
   
-  while(total_units > max_sales_units) {
+  max_iter <- 10000
+  iter <- 0
+  while(total_units > max_sales_units && iter < max_iter) {
+    iter <- iter + 1
     max_units <- max(units_by_day)
     if(max_units == 0) break
     idx <- which(units_by_day == max_units, arr.ind = TRUE)[1,]
@@ -58,16 +65,19 @@ repair_solution_inplace <- function(sol, forecasts, week_id, max_sales_units) {
     fc_store <- forecasts[forecasts$Store == store & forecasts$Week_ID == week_id, ]
     C_pred <- fc_store$Forecast[fc_store$Day == d]
     
-    J <- max(0, round(sol[s, d, 1]))
-    X <- max(0, round(sol[s, d, 2]))
+    J <- sol[s, d, 1]
+    X <- sol[s, d, 2]
     PR <- min(0.30, max(0, sol[s, d, 3]))
     
     if(X > 0) {
       X <- X - 1
     } else if(J > 0) {
       J <- J - 1
+    } else if(PR > 0.01) {
+      PR <- max(0, PR - 0.01)
     } else {
-      PR <- max(0, PR - 0.05)
+      # Nao consegue reduzir mais: forcar J=X=0 neste dia
+      J <- 0; X <- 0; PR <- 0
     }
     
     sol[s, d, 1] <- J
@@ -82,11 +92,11 @@ repair_solution_inplace <- function(sol, forecasts, week_id, max_sales_units) {
 }
 
 # Função principal de avaliação para O3
-eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000, 
-                         weight_hr = 10, verbose = FALSE) {
+eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
+                         verbose = FALSE, max_J = NULL, max_X = NULL) {
   
-  # Reparar solução (garante restrição de unidades)
-  sol_repaired <- repair_solution_inplace(sol, forecasts, week_id, max_sales_units)
+  # Reparar solução (garante limites dinâmicos e restrição de unidades)
+  sol_repaired <- repair_solution_inplace(sol, forecasts, week_id, max_sales_units, max_J, max_X)
   dim(sol_repaired) <- c(4, 7, 3)
   
   store_names <- c("baltimore", "lancaster", "philadelphia", "richmond")
@@ -113,6 +123,8 @@ eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
     for(d in 1:7) {
       J <- max(0, round(sol_repaired[s, d, 1]))
       X <- max(0, round(sol_repaired[s, d, 2]))
+      if(!is.null(max_J)) J <- min(J, max_J[(s-1)*7 + d])
+      if(!is.null(max_X)) X <- min(X, max_X[(s-1)*7 + d])
       PR <- min(0.30, max(0, sol_repaired[s, d, 3]))
       
       C_pred <- fc_store$Forecast[fc_store$Day == d]
@@ -162,13 +174,16 @@ eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
     cat("Total sales units:", total_sales_units, "/", max_sales_units, "\n")
     cat("Total HR (J+X):", total_hr, "\n")
     cat("Total profit: $", round(total_profit, 2), "\n")
-    cat(sprintf("Função objetivo (-profit * 0.1 + HR) = %.2f\n", -total_profit * 0.1 + total_hr))
+    cat(sprintf("Função objetivo (HR - profit * 0.1) = %.4f\n", total_hr - total_profit * 0.1))
   }
   
-  # Garantia final (não deve acontecer, mas por segurança)
+  # Penalidade se exceder restrição de unidades
   if(total_sales_units > max_sales_units) return(-1e9)
   
-  # Multiobjetivo: minimizar HR com penalização do lucro
-  objective_value <- -total_profit * 0.1 + total_hr
-  return(-objective_value)  # hill climbing maximiza, por isso invertemos o sinal
+  # Objetivo: minimizar HR (principal), maximizar lucro (secundário)
+  # Fórmula: HR - profit * 0.1
+  # O fator 0.1 equilibra HR e lucro: reduzir 1 pessoa de HR equivale a ganhar 10$ de lucro
+  # hill climbing maximiza, por isso retornamos o negativo
+  objective_value <- total_hr - total_profit * 0.1
+  return(-objective_value)
 }
