@@ -46,8 +46,8 @@ sann_gr <- function(par) {
 # 5. AVALIAÇÃO (SANN MINIMIZES BY DEFAULT → negate profit)
 eval_fn_sann <- function(sol) {
   # Return negative profit so optim minimizes -profit == maximizes profit
-  -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
-  # -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  # -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
 }
 
 # 6. SOLUÇÃO INICIAL ALEATÓRIA
@@ -113,7 +113,7 @@ cat("Lucro total: $", round(best_profit, 2), "\n\n")
 
 # 9. DETALHES DO LUCRO
 cat("\n=== DETALHES DO LUCRO POR LOJA/DIA ===\n")
-eval_plan_O1(sann_result$par, forecasts = forecasts, week_id = week_id, verbose = TRUE)
+eval_plan_O2(sann_result$par, forecasts = forecasts, week_id = week_id, verbose = TRUE)
 
 # 10. GUARDAR RESULTADOS
 saveRDS(sann_result, file = paste0("resultado_SANN_O1_semana_", week_id, ".rds"))
@@ -125,7 +125,7 @@ best_profits <- -track$best_val[valid_iters]  # Convert back to positive profit
 
 plot(valid_iters, best_profits, type = "l", col = "steelblue", lwd = 2,
      xlab = "Iteration", ylab = "Best Profit Found (USD)",
-     main = "Simulated Annealing Convergence (O1)")
+     main = "Simulated Annealing Convergence (O2)")
 abline(h = max(best_profits), col = "red", lty = 2)
 grid()
 legend("bottomright", legend = c("Best Profit", "Final Profit"),
