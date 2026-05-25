@@ -1,7 +1,7 @@
 ################################################################################
 # eval_plan_O3.R
 # Função de avaliação para o objetivo O3 (multiobjetivo)
-# Maximizar lucro e minimizar HR: objective = profit - weight_hr * total_HR
+# Minimizar HR penalizando lucro: objective = -profit * 0.1 + HR
 # Com restrição rígida de unidades vendidas ≤ max_sales_units
 # Inclui reparação automática de soluções inválidas
 ################################################################################
@@ -162,13 +162,13 @@ eval_plan_O3 <- function(sol, forecasts, week_id, max_sales_units = 10000,
     cat("Total sales units:", total_sales_units, "/", max_sales_units, "\n")
     cat("Total HR (J+X):", total_hr, "\n")
     cat("Total profit: $", round(total_profit, 2), "\n")
-    cat(sprintf("Função objetivo (profit - %.1f * HR) = %.2f\n", weight_hr, total_profit - weight_hr * total_hr))
+    cat(sprintf("Função objetivo (-profit * 0.1 + HR) = %.2f\n", -total_profit * 0.1 + total_hr))
   }
   
   # Garantia final (não deve acontecer, mas por segurança)
   if(total_sales_units > max_sales_units) return(-1e9)
   
-  # Multiobjetivo: quanto maior weight_hr, mais se penaliza o uso de HR
-  objective_value <- total_profit - weight_hr * total_hr
-  return(objective_value)
+  # Multiobjetivo: minimizar HR com penalização do lucro
+  objective_value <- -total_profit * 0.1 + total_hr
+  return(-objective_value)  # hill climbing maximiza, por isso invertemos o sinal
 }
