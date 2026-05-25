@@ -10,13 +10,16 @@ source("eval_plan_O2.R")
 
 # 1. CARREGAR PREVISÕES (identical to original)
 cat("Carregando previsões...\n")
-raw <- read.csv("all_store_predictions.csv")
-forecasts <- data.frame(
-  Store    = raw$Store,
-  Week_ID  = raw$Run,
-  Day      = raw$Step,
-  Forecast = raw$Num_Customers
-)
+# raw <- read.csv("all_store_predictions.csv")
+# forecasts <- data.frame(
+#   Store    = raw$Store,
+#   Week_ID  = raw$Run,
+#   Day      = raw$Step,
+#   Forecast = raw$Num_Customers
+# )
+
+forecasts <- read.csv("all_store_predictions.csv")
+names(forecasts) <- c("Week_ID", "Day", "Forecast", "Store")
 
 semanas_disponiveis <- sort(unique(forecasts$Week_ID))
 cat("Semanas disponíveis:", paste(semanas_disponiveis, collapse = ", "), "\n")
