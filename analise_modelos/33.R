@@ -1,12 +1,12 @@
-# 36_otimizacao_O3_NSGA2_CORRETO.R
-# O3 - Multiobjetivo com NSGA-II
-# Adiciona avaliação da função: rh - 0.1 * lucro
+# 36_otimizacao_O3_NSGA2_ADAPTADO.R
+# O3 - Multiobjetivo com NSGA-II (adaptado ao teu eval_plan_O3.R)
+# Usa eval_plan_O3 sem return_components (calcula rh e profit manualmente)
 
 caminho_base <- "~/GitHub/abi-usa-stores"
 
-source("utils.R")
-source("scripts/optimization.R")
-source("eval_plan_O3.R")
+source(file.path(caminho_base, "scripts", "utils.R"))
+source(file.path(caminho_base, "scripts", "optimization.R"))
+source(file.path(caminho_base, "eval_plan_O3.R"))
 
 if(!require(mco)) {
   install.packages("mco")
@@ -26,7 +26,7 @@ MAX_J <- 20
 MAX_X <- 15
 MAX_PR <- 0.30
 MAX_UNIDADES <- 10000
-ALPHA <- 0.1  # peso do lucro na função objetivo
+ALPHA <- 0.1
 
 lower <- rep(0, 84)
 upper <- c(rep(MAX_J, 28), rep(MAX_X, 28), rep(MAX_PR, 28))
@@ -62,23 +62,68 @@ for(store in lojas) {
 cat("\n📊 Previsões carregadas:", nrow(forecasts), "registos\n")
 
 # ============================================================
-# FUNÇÃO MULTIOBJETIVO (para NSGA-II)
+# FUNÇÃO PARA CALCULAR RH (MANUALMENTE)
+# ============================================================
+
+calcular_RH <- function(sol) {
+  if(is.matrix(sol)) sol <- as.numeric(sol)
+  dim(sol) <- c(4, 7, 3)
+  rh <- 0
+  for(i in 1:4) {
+    for(d in 1:7) {
+      rh <- rh + max(0, round(sol[i, d, 1]))  # J
+      rh <- rh + max(0, round(sol[i, d, 2]))  # X
+    }
+  }
+  return(rh)
+}
+
+# ============================================================
+# FUNÇÃO PARA APLICAR REPAIR (USANDO A DO eval_plan_O3)
+# ============================================================
+
+reparar_solucao <- function(sol) {
+  return(repair_solution_inplace(sol, forecasts, 21, MAX_UNIDADES))
+}
+
+# ============================================================
+# FUNÇÃO PARA CALCULAR LUCRO (USANDO eval_plan_O3 COM alpha = 0)
+# ============================================================
+# Como eval_plan_O3 retorna -(HR - alpha * profit) para alpha=0.1,
+# não conseguimos extrair apenas o lucro facilmente.
+# Vamos usar eval_plan_O2 para o lucro (que já temos)
+
+source(file.path(caminho_base, "eval_plan_O2.R"))
+
+calcular_lucro <- function(sol) {
+  sol_repaired <- reparar_solucao(sol)
+  profit <- eval_plan_O2(sol_repaired, forecasts, 21, MAX_UNIDADES, verbose = FALSE)
+  return(profit)
+}
+
+# ============================================================
+# FUNÇÃO MULTIOBJETIVO (sem return_components)
 # ============================================================
 
 multiobjetivo <- function(sol) {
   
   if(is.matrix(sol)) sol <- as.numeric(sol)
   
-  componentes <- eval_plan_O3(sol, forecasts, 21, MAX_UNIDADES, 
-                              verbose = FALSE)#, 
-                             # return_components = TRUE)
+  # Aplicar repair
+  sol_repaired <- reparar_solucao(sol)
   
-  rh <- componentes$total_hr
-  profit <- componentes$total_profit
+  # Calcular lucro (usando eval_plan_O2)
+  profit <- calcular_lucro(sol_repaired)
+  
+  # Calcular RH
+  rh <- calcular_RH(sol_repaired)
   
   # NSGA-II MINIMIZA ambos os objetivos
-  obj1 <- rh                                    # minimizar RH
-  obj2 <- -profit                               # minimizar = maximizar lucro
+  # Objetivo 1: RH (minimizar)
+  obj1 <- rh
+  
+  # Objetivo 2: -profit (minimizar = maximizar lucro)
+  obj2 <- -profit
   
   return(c(obj1, obj2))
 }
@@ -104,14 +149,10 @@ for(i in 1:popSize) {
 
 cat("\n", paste(rep("=", 70), collapse=""), "\n")
 cat("🎯 OTIMIZAÇÃO O3 - NSGA-II (MULTIOBJETIVO)\n")
-cat(paste(rep("=", 70), collapse=""), "\n")
+cat("   Adaptado ao teu eval_plan_O3.R\n")
 cat("   Objetivo 1: MINIMIZAR RH\n")
 cat("   Objetivo 2: MAXIMIZAR lucro\n")
-cat("\nParâmetros:\n")
-cat("   Dimensão:", 84, "variáveis\n")
-cat("   Objetivos:", 2, "\n")
-cat("   População:", popSize, "\n")
-cat("   Gerações:", generations, "\n")
+cat(paste(rep("=", 70), collapse=""), "\n")
 
 resultado <- nsga2(
   fn = multiobjetivo,
@@ -151,30 +192,27 @@ if(length(pareto) > 0 && sum(pareto) > 0) {
   df_pareto <- unique(df_pareto)
   df_pareto <- df_pareto[df_pareto$Lucro > 0, ]
   
-  # ============================================================
-  # CALCULAR FUNÇÃO OBJETIVO: rh - alpha * lucro (com alpha = 0.1)
-  # ============================================================
-  
-  df_pareto$F_objetivo <- df_pareto$RH - ALPHA * df_pareto$Lucro
+  # Calcular F = RH - 0.1 * Lucro
+  df_pareto$F <- df_pareto$RH - ALPHA * df_pareto$Lucro
   
   cat("\n🎯 Soluções na fronteira de Pareto (", nrow(df_pareto), " soluções):\n")
   cat(sprintf("   %3s | %8s | %10s | %15s\n", "RH", "Lucro", "F = RH - 0.1*Lucro", "Melhor?"))
-  cat("   ", paste(rep("-", 45), collapse=""), "\n")
+  cat("   ", paste(rep("-", 50), collapse=""), "\n")
   
+  melhor_idx <- which.min(df_pareto$F)
   for(i in 1:nrow(df_pareto)) {
-    melhor <- if(df_pareto$F_objetivo[i] == min(df_pareto$F_objetivo)) "🏆 MELHOR" else ""
+    estrela <- if(i == melhor_idx) "🏆 MELHOR" else ""
     cat(sprintf("   %3d | $%6.0f | %12.2f | %s\n", 
-                df_pareto$RH[i], df_pareto$Lucro[i], df_pareto$F_objetivo[i], melhor))
+                df_pareto$RH[i], df_pareto$Lucro[i], df_pareto$F[i], estrela))
   }
   
   # ============================================================
-  # SOLUÇÃO QUE MINIMIZA rh - 0.1 * lucro
+  # SOLUÇÃO QUE MINIMIZA F
   # ============================================================
   
-  melhor_idx <- which.min(df_pareto$F_objetivo)
   melhor_rh <- df_pareto$RH[melhor_idx]
   melhor_lucro <- df_pareto$Lucro[melhor_idx]
-  melhor_f <- df_pareto$F_objetivo[melhor_idx]
+  melhor_f <- df_pareto$F[melhor_idx]
   
   cat("\n", paste(rep("=", 70), collapse=""), "\n")
   cat("🏆 MELHOR SOLUÇÃO SEGUNDO F = RH - 0.1 × LUCRO\n")
@@ -182,7 +220,6 @@ if(length(pareto) > 0 && sum(pareto) > 0) {
   cat("\n   📊 F =", round(melhor_f, 2))
   cat("\n   👥 RH =", melhor_rh, "funcionários")
   cat("\n   💰 Lucro = $", round(melhor_lucro, 2))
-  cat("\n   📈 Fórmula: RH - 0.1 × Lucro =", round(melhor_rh, 0), "-", round(0.1 * melhor_lucro, 1), "=", round(melhor_f, 2))
   
   # ============================================================
   # COMPARAÇÃO COM O2
@@ -205,20 +242,17 @@ if(length(pareto) > 0 && sum(pareto) > 0) {
   }
   
   # ============================================================
-  # GRÁFICO DE PARETO
+  # GRÁFICO
   # ============================================================
   
   p <- ggplot(df_pareto, aes(x = RH, y = Lucro)) +
-    geom_point(aes(color = F_objetivo), size = 3) +
+    geom_point(aes(color = F), size = 3) +
     geom_line(color = "red", linetype = "dashed") +
     scale_color_gradient(low = "green", high = "red", name = "F = RH - 0.1×Lucro") +
     geom_point(data = df_pareto[melhor_idx, ], aes(x = RH, y = Lucro), 
                color = "gold", size = 5, shape = 18) +
-    annotate("text", x = df_pareto[melhor_idx, "RH"] + 2, 
-             y = df_pareto[melhor_idx, "Lucro"], 
-             label = "🏆 Melhor F", size = 4) +
     labs(title = "Fronteira de Pareto - O3 (Minimizar RH vs Maximizar Lucro)",
-         subtitle = paste("Limite de 10.000 unidades | Melhor F =", round(melhor_f, 2)),
+         subtitle = paste("Melhor F =", round(melhor_f, 2), "| RH =", melhor_rh, "| Lucro = $", round(melhor_lucro, 0)),
          x = "Número de Funcionários (RH)", 
          y = "Lucro ($)") +
     theme_minimal()
@@ -232,7 +266,7 @@ if(length(pareto) > 0 && sum(pareto) > 0) {
   # GUARDAR RESULTADOS
   # ============================================================
   
-  resultados_path <- file.path(caminho_base, "analise_modelos", "resultados_O3_PARETO")
+  resultados_path <- file.path(caminho_base, "analise_modelos", "resultados_O3_ADAPTADO")
   if(!dir.exists(resultados_path)) dir.create(resultados_path)
   
   saveRDS(resultado, file.path(resultados_path, "nsga2_resultado.rds"))
@@ -243,10 +277,6 @@ if(length(pareto) > 0 && sum(pareto) > 0) {
   cat("✅ RESULTADOS GUARDADOS\n")
   cat(paste(rep("=", 70), collapse=""), "\n")
   cat("   Pasta:", resultados_path, "\n")
-  cat("   - nsga2_resultado.rds\n")
-  cat("   - fronteira_pareto.rds\n")
-  cat("   - fronteira_pareto.csv\n")
-  cat("   - fronteira_pareto_O3.png\n")
   
 } else {
   cat("\n❌ Nenhuma solução de Pareto encontrada!\n")

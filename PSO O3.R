@@ -43,7 +43,7 @@ swarm <- ParticleSwarm$new(
   pop_size = 60,
   values_names = NULL, # Optional: rep(c("J","X","PR"), each=28)
   fitness_function = fitness_fn,
-  max_it = 150,
+  max_it = 20,
   acceleration_coefficient_range = list(c(0.5, 2.0), c(0.5, 2.0)),
   inertia = 0.7,
   ranges_of_values = ranges_of_values
@@ -51,7 +51,7 @@ swarm <- ParticleSwarm$new(
 
 cat("🚀 Starting PSO optimization for O3 (Week", week_id, ")...\n")
 start_time <- Sys.time()
-swarm$run(verbose = TRUE, plot = FALSE, save_file = FALSE)
+swarm$run(verbose = TRUE, plot = FALSE, save_file = TRUE)
 cat(sprintf("⏱️  Finished in %.2f seconds.\n", as.numeric(difftime(Sys.time(), start_time, units = "secs"))))
 
 # 7. Extract & Verify Results
