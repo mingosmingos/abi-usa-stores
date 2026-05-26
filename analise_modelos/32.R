@@ -70,8 +70,8 @@ multiobjetivo <- function(sol) {
   if(is.matrix(sol)) sol <- as.numeric(sol)
   
   componentes <- eval_plan_O3(sol, forecasts, 21, MAX_UNIDADES, 
-                              verbose = FALSE)#, 
-                             # return_components = TRUE)
+                              verbose = FALSE, 
+                             return_components = TRUE)
   
   rh <- componentes$total_hr
   profit <- componentes$total_profit
@@ -184,6 +184,9 @@ if(length(pareto) > 0 && sum(pareto) > 0) {
   cat("\n   💰 Lucro = $", round(melhor_lucro, 2))
   cat("\n   📈 Fórmula: RH - 0.1 × Lucro =", round(melhor_rh, 0), "-", round(0.1 * melhor_lucro, 1), "=", round(melhor_f, 2))
   
+  
+  
+  
   # ============================================================
   # COMPARAÇÃO COM O2
   # ============================================================
@@ -227,7 +230,45 @@ if(length(pareto) > 0 && sum(pareto) > 0) {
   
   ggsave(file.path(caminho_base, "analise_modelos", "fronteira_pareto_O3.png"), 
          p, width = 12, height = 7)
+  # ============================================================
+  # PLANO DETALHADO (J, X, PR por dia) - PARA A MELHOR SOLUÇÃO
+  # ============================================================
   
+  cat("\n", paste(rep("=", 70), collapse=""), "\n")
+  cat("📋 PLANO DETALHADO DA MELHOR SOLUÇÃO O3\n")
+  cat(paste(rep("=", 70), collapse=""), "\n")
+  
+  # Obter a solução que minimiza F = RH - 0.1 * Lucro
+  melhor_idx <- which.min(df_pareto$F)
+  melhor_solucao_raw <- resultado$par[pareto, ][melhor_idx, ]
+  
+  # Aplicar repair para garantir limites
+  melhor_solucao <- reparar_solucao(melhor_solucao_raw)
+  dim(melhor_solucao) <- c(4, 7, 3)
+  
+  lojas <- c("baltimore", "lancaster", "philadelphia", "richmond")
+  dias <- c("Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo")
+  
+  for(i in 1:4) {
+    cat("\n", paste(rep("-", 50), collapse=""), "\n")
+    cat("📍 LOJA:", toupper(lojas[i]), "\n")
+    cat(paste(rep("-", 50), collapse=""), "\n")
+    
+    cat("\n   Dia       | J | X | PR\n")
+    cat("   ----------|---|---|-----\n")
+    
+    for(d in 1:7) {
+      J <- round(melhor_solucao[i, d, 1])
+      X <- round(melhor_solucao[i, d, 2])
+      PR <- round(melhor_solucao[i, d, 3] * 100, 0)
+      cat("   ", dias[d], " | ", J, " | ", X, " | ", PR, "%\n", sep="")
+    }
+    
+    total_J <- sum(round(melhor_solucao[i, , 1]))
+    total_X <- sum(round(melhor_solucao[i, , 2]))
+    cat("\n   📊 TOTAIS DA SEMANA:\n")
+    cat("      J =", total_J, " | X =", total_X, " | RH =", total_J + total_X, "\n")
+  }
   # ============================================================
   # GUARDAR RESULTADOS
   # ============================================================
