@@ -291,7 +291,125 @@ run_sann_O1 <- function(week_id, max_iter = 5000, initial_temp = 5) {
   return(list(solution = sann_result$par, profit = best_profit))
 }
 
+# ============================================================================
+# SANN para O2 - EXATAMENTE IGUAL AO SCRIPT (limites fixos 50, 30)
+# ============================================================================
 
+run_sann_O2 <- function(week_id, max_iter = 5000, initial_temp = 50) {
+  
+  # LIMITES FIXOS (como no script SANN O2 Tracked.R)
+  max_J <- 50
+  max_X <- 30
+  max_PR <- 0.30
+  max_sales_units <- 10000
+  
+  lower <- rep(0, 84)
+  upper <- c(rep(max_J, 28), rep(max_X, 28), rep(max_PR, 28))
+  
+  # Neighbourhood generator (igual ao script)
+  sann_gr <- function(par) {
+    hchange(par, lower = lower, upper = upper, operator = "*",
+            dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
+  }
+  
+  # Função de avaliação (igual ao script)
+  eval_fn_sann <- function(sol) {
+    -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, 
+                  max_sales_units = max_sales_units, verbose = FALSE)
+  }
+  
+  # Solução inicial ALEATÓRIA (igual ao script)
+  set.seed(122)
+  s0 <- runif(84, min = lower, max = upper)
+  
+  # Configuração do SANN (trace = FALSE para não poluir a app)
+  control_sann <- list(maxit = max_iter, temp = initial_temp, trace = FALSE, tmax = 30)
+  
+  sann_result <- optim(par = s0, fn = eval_fn_sann, gr = sann_gr,
+                       method = "SANN", control = control_sann)
+  
+  best_profit <- -sann_result$value
+  
+  # Aplicar reparação final para garantir restrição
+  sol_repaired <- repair_solution_inplace(sann_result$par, forecasts, week_id, max_sales_units)
+  final_profit <- eval_plan_O2(sol_repaired, forecasts, week_id, max_sales_units, verbose = FALSE)
+  
+  # Mostrar resultados na consola (para debug)
+  cat(sprintf("\n=== SANN O2 Semana %d ===\n", week_id))
+  cat(sprintf("Profit: $ %.2f\n", final_profit))
+  cat(sprintf("Limites: max_J=%d, max_X=%d\n", max_J, max_X))
+  
+  return(list(solution = sol_repaired, profit = final_profit))
+}
+
+
+# ============================================================================
+# SANN para O3 - EXATAMENTE IGUAL AO SCRIPT (limites fixos 50, 30)
+# ============================================================================
+
+run_sann_O3 <- function(week_id, max_iter = 5000, initial_temp = 50, alpha = 0.1) {
+  
+  # LIMITES FIXOS (como no script SANN O3 Tracked.R)
+  max_J <- 50
+  max_X <- 30
+  max_PR <- 0.30
+  max_sales_units <- 10000
+  
+  lower <- rep(0, 84)
+  upper <- c(rep(max_J, 28), rep(max_X, 28), rep(max_PR, 28))
+  
+  # Neighbourhood generator (igual ao script)
+  sann_gr <- function(par) {
+    hchange(par, lower = lower, upper = upper, operator = "*",
+            dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
+  }
+  
+  # Função de avaliação (igual ao script)
+  # Nota: eval_plan_O3 retorna -(HR - profit * alpha) para maximização no hclimbing
+  # Por isso, -eval_plan_O3 = HR - profit * alpha (que SANN minimiza)
+  eval_fn_sann <- function(sol) {
+    -eval_plan_O3(sol, forecasts = forecasts, week_id = week_id,
+                  max_sales_units = max_sales_units, verbose = FALSE,
+                  alpha = alpha)
+  }
+  
+  # Solução inicial ALEATÓRIA (igual ao script)
+  set.seed(123)
+  s0 <- runif(84, min = lower, max = upper)
+  
+  # Configuração do SANN (trace = FALSE para não poluir a app)
+  control_sann <- list(maxit = max_iter, temp = initial_temp, trace = FALSE, tmax = 20)
+  
+  sann_result <- optim(par = s0, fn = eval_fn_sann, gr = sann_gr,
+                       method = "SANN", control = control_sann)
+  
+  # Obter componentes da melhor solução
+  comps <- eval_plan_O3(sann_result$par, forecasts, week_id, max_sales_units,
+                        verbose = FALSE, return_components = TRUE, alpha = alpha)
+  
+  # Aplicar reparação final para garantir restrição
+  sol_repaired <- repair_solution_inplace(sann_result$par, forecasts, week_id, max_sales_units)
+  comps_repaired <- eval_plan_O3(sol_repaired, forecasts, week_id, max_sales_units,
+                                 verbose = FALSE, return_components = TRUE, alpha = alpha)
+  
+  # Se a solução reparada for melhor, usa-a
+  if(comps_repaired$total_profit > comps$total_profit) {
+    comps <- comps_repaired
+    sann_result$par <- sol_repaired
+  }
+  
+  # Mostrar resultados na consola (para debug)
+  cat(sprintf("\n=== SANN O3 Semana %d ===\n", week_id))
+  cat(sprintf("Profit: $ %.2f\n", comps$total_profit))
+  cat(sprintf("HR total: %d\n", comps$total_hr))
+  cat(sprintf("Sales units: %d / %d\n", comps$total_sales_units, max_sales_units))
+  cat(sprintf("Objective (HR - profit*%.2f): %.2f\n", alpha, comps$total_hr - comps$total_profit * alpha))
+  
+  return(list(solution = sann_result$par, 
+              profit = comps$total_profit,
+              hr = comps$total_hr,
+              sales_units = comps$total_sales_units))
+}
 
 # Processar solução para tabela (otimizada para ser rápida)
 process_solution <- function(sol, week_id, objective, selected_store = NULL) {
