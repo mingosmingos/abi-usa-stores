@@ -5,7 +5,7 @@
 library(GA)
 library(tidyverse)
 
-source("~/abi-usa-stores/scripts/utils.R")
+source("scripts/utils.R")
 
 #' Calcula clientes assistidos (Slide 12)
 #' @param J Número de funcionários Junior

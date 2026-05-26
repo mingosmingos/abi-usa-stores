@@ -3,9 +3,9 @@
 
 caminho_base <- "~/GitHub/abi-usa-stores"
 
-source(file.path(caminho_base, "scripts", "utils.R"))
-source(file.path(caminho_base, "scripts", "optimization.R"))
-source(file.path(caminho_base, "eval_plan_O2.R"))
+source("scripts/utils.R")
+source("scripts/optimization.R")
+source("eval_plan_O2.R")
 
 library(GA)
 

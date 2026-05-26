@@ -46,8 +46,8 @@ sann_gr <- function(par) {
 # 5. AVALIAÇÃO (SANN MINIMIZES BY DEFAULT → negate profit)
 eval_fn_sann <- function(sol) {
   # Return negative profit so optim minimizes -profit == maximizes profit
-  # -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
-  -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  #-eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+   -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
 }
 
 # 6. SOLUÇÃO INICIAL ALEATÓRIA
