@@ -257,25 +257,26 @@ run_optimization_O3 <- function(week_id, max_iter = 8000, alpha = 0.1) {
 # FUNÇÕES SANN (SIMULATED ANNEALING)
 # ============================================================================
 
-# SANN para O1
+# SANN para O1 (baseado no SANN O1 Tracked.R corrigido)
 run_sann_O1 <- function(week_id, max_iter = 5000, initial_temp = 5) {
   
   lower <- rep(0, 84)
   upper <- c(rep(MAX_J, 28), rep(MAX_X, 28), rep(MAX_PR, 28))
   
-  # Neighbourhood generator (igual aos scripts)
+  # Neighbourhood generator (igual ao script)
   sann_gr <- function(par) {
     hchange(par, lower = lower, upper = upper, operator = "*",
             dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
   }
   
-  # Função objetivo (negativa porque SANN minimiza)
+  # Função objetivo (USA eval_plan_O1)
   eval_fn <- function(sol) {
     -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
   }
   
-  set.seed(123)
-  s0 <- random_solution()
+  # Solução inicial aleatória (seed = 122 como no script)
+  set.seed(122)
+  s0 <- runif(84, min = lower, max = upper)
   
   control_sann <- list(maxit = max_iter, temp = initial_temp, trace = FALSE, tmax = 30)
   
@@ -290,13 +291,13 @@ run_sann_O1 <- function(week_id, max_iter = 5000, initial_temp = 5) {
   return(list(solution = sann_result$par, profit = best_profit))
 }
 
-# SANN para O2
-run_sann_O2 <- function(week_id, max_iter = 5000, initial_temp = 50) {
+# SANN para O2 - usando MESMA lógica do HC O2 (limites dinâmicos + solução heurística)
+run_sann_O2 <- function(week_id, max_iter = 10000, initial_temp = 50) {
   
   store_names <- c("baltimore", "lancaster", "philadelphia", "richmond")
   max_sales_units <- 10000
   
-  # Limites dinâmicos (como no HC O2)
+  # 1. Limites dinâmicos (IGUAL ao HC O2)
   max_J_dynamic <- numeric(28)
   max_X_dynamic <- numeric(28)
   
@@ -318,7 +319,7 @@ run_sann_O2 <- function(week_id, max_iter = 5000, initial_temp = 50) {
   lower <- rep(0, 84)
   upper <- c(max_J, max_X, max_PR)
   
-  # Solução inicial heurística
+  # 2. Solução inicial heurística (IGUAL ao HC O2)
   s0 <- array(0, dim = c(4, 7, 3))
   for(s in 1:4) {
     store <- store_names[s]
@@ -340,15 +341,17 @@ run_sann_O2 <- function(week_id, max_iter = 5000, initial_temp = 50) {
     }
   }
   s0 <- c(s0)
+  
+  # 3. Reparar solução inicial (IGUAL ao HC O2)
   s0 <- repair_solution_inplace(s0, forecasts, week_id, max_sales_units)
   
-  # Neighbourhood generator
+  # 4. Neighbourhood generator
   sann_gr <- function(par) {
     hchange(par, lower = lower, upper = upper, operator = "*",
             dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
   }
   
-  # Função objetivo
+  # 5. Função objetivo (usa eval_plan_O2)
   eval_fn <- function(sol) {
     -eval_plan_O2(sol, forecasts, week_id, max_sales_units, verbose = FALSE)
   }
@@ -365,7 +368,75 @@ run_sann_O2 <- function(week_id, max_iter = 5000, initial_temp = 50) {
   
   best_profit <- -sann_result$value
   
-  return(list(solution = sann_result$par, profit = best_profit))
+  # 6. Calcular HR e unidades corretamente
+  dim(sann_result$par) <- c(4, 7, 3)
+  
+  # Recalcular profit, units e HR usando eval_plan_O2 com verbose = FALSE
+  # Mas precisamos dos valores. Vamos usar a mesma lógica do process_solution
+  W_s <- c(700, 730, 760, 800)
+  F_J <- c(1.00, 1.05, 1.10, 1.15)
+  F_X <- c(1.15, 1.20, 1.15, 1.25)
+  hr_cost_J_weekday <- 60
+  hr_cost_J_weekend <- 70
+  hr_cost_X_weekday <- 80
+  hr_cost_X_weekend <- 95
+  
+  total_profit <- 0
+  total_units <- 0
+  total_hr <- 0
+  
+  for(s in 1:4) {
+    store <- store_names[s]
+    fc_store <- forecasts[forecasts$Store == store & forecasts$Week_ID == week_id, ]
+    weekly_profit <- 0
+    
+    for(d in 1:7) {
+      J <- max(0, round(sann_result$par[s, d, 1]))
+      X <- max(0, round(sann_result$par[s, d, 2]))
+      PR <- min(0.30, max(0, sann_result$par[s, d, 3]))
+      
+      C_pred <- fc_store$Forecast[d]
+      max_assisted <- 7 * X + 6 * J
+      A <- min(max_assisted, C_pred)
+      
+      is_weekend <- (d %in% c(1, 7))
+      cost_J <- ifelse(is_weekend, hr_cost_J_weekend, hr_cost_J_weekday)
+      cost_X <- ifelse(is_weekend, hr_cost_X_weekend, hr_cost_X_weekday)
+      daily_cost_hr <- J * cost_J + X * cost_X
+      
+      n_assisted_by_X <- min(X * 7, A)
+      n_assisted_by_J <- A - n_assisted_by_X
+      
+      daily_units <- 0
+      daily_revenue_raw <- 0
+      
+      if(n_assisted_by_X > 0) {
+        U_X <- round(F_X[s] * 10 / log(2 - PR))
+        P_X_raw <- U_X * (1 - PR) * 1.07
+        daily_units <- daily_units + n_assisted_by_X * U_X
+        daily_revenue_raw <- daily_revenue_raw + n_assisted_by_X * P_X_raw
+      }
+      if(n_assisted_by_J > 0) {
+        U_J <- round(F_J[s] * 10 / log(2 - PR))
+        P_J_raw <- U_J * (1 - PR) * 1.07
+        daily_units <- daily_units + n_assisted_by_J * U_J
+        daily_revenue_raw <- daily_revenue_raw + n_assisted_by_J * P_J_raw
+      }
+      
+      daily_revenue <- round(daily_revenue_raw)
+      daily_net_profit <- daily_revenue - daily_cost_hr
+      
+      weekly_profit <- weekly_profit + daily_net_profit
+      total_units <- total_units + daily_units
+      total_hr <- total_hr + J + X
+    }
+    total_profit <- total_profit + weekly_profit - W_s[s]
+  }
+  
+  return(list(solution = sann_result$par, 
+              profit = total_profit,
+              sales_units = total_units,
+              hr = total_hr))
 }
 
 # SANN para O3
@@ -740,48 +811,73 @@ server <- function(input, output, session) {
         incProgress(0.2, detail = "Setting up O1 optimization")
         if(input$method == "HC") {
           result <- run_optimization_O1(as.numeric(input$week), max_iter)
+          processed <- process_solution(result$solution, as.numeric(input$week), 
+                                        input$objective, input$store)
+          opt_results(list(
+            details = processed$details,
+            total_profit = processed$total_profit,
+            total_sales_units = processed$total_sales_units,
+            total_hr = processed$total_hr
+          ))
         } else {
           result <- run_sann_O1(as.numeric(input$week), max_iter, initial_temp = 5)
+          processed <- process_solution(result$solution, as.numeric(input$week), 
+                                        input$objective, input$store)
+          opt_results(list(
+            details = processed$details,
+            total_profit = result$profit,
+            total_sales_units = processed$total_sales_units,
+            total_hr = processed$total_hr
+          ))
         }
       } else if(input$objective == "O2") {
         incProgress(0.2, detail = "Setting up O2 optimization (this may take longer)")
         if(input$method == "HC") {
           result <- run_optimization_O2(as.numeric(input$week), max_iter)
+          processed <- process_solution(result$solution, as.numeric(input$week), 
+                                        input$objective, input$store)
+          opt_results(list(
+            details = processed$details,
+            total_profit = processed$total_profit,
+            total_sales_units = processed$total_sales_units,
+            total_hr = processed$total_hr
+          ))
         } else {
           result <- run_sann_O2(as.numeric(input$week), max_iter, initial_temp = 50)
+          # NÃO usar process_solution para os valores, usar os do result
+          # Mas a tabela ainda precisa do process_solution
+          processed <- process_solution(result$solution, as.numeric(input$week), 
+                                        input$objective, input$store)
+          opt_results(list(
+            details = processed$details,
+            total_profit = result$profit,        # <-- do SANN
+            total_sales_units = result$sales_units,  # <-- do SANN
+            total_hr = result$hr                 # <-- do SANN
+          ))
         }
       } else {
         incProgress(0.2, detail = "Setting up O3 optimization")
         if(input$method == "HC") {
           result <- run_optimization_O3(as.numeric(input$week), max_iter, alpha = 0.1)
+          processed <- process_solution(result$solution, as.numeric(input$week), 
+                                        input$objective, input$store)
+          opt_results(list(
+            details = processed$details,
+            total_profit = processed$total_profit,
+            total_sales_units = processed$total_sales_units,
+            total_hr = processed$total_hr
+          ))
         } else {
           result <- run_sann_O3(as.numeric(input$week), max_iter, initial_temp = 50, alpha = 0.1)
+          processed <- process_solution(result$solution, as.numeric(input$week), 
+                                        input$objective, input$store)
+          opt_results(list(
+            details = processed$details,
+            total_profit = result$profit,
+            total_sales_units = result$sales_units,
+            total_hr = result$hr
+          ))
         }
-      }
-      
-      incProgress(0.7, detail = "Processing results")
-      
-      # Para O3, usar valores diretos da otimização
-      if(input$objective == "O3") {
-        processed <- process_solution(result$solution, as.numeric(input$week), 
-                                      input$objective, input$store)
-        
-        opt_results(list(
-          details = processed$details,
-          total_profit = result$profit,
-          total_sales_units = result$sales_units,
-          total_hr = result$hr
-        ))
-      } else {
-        processed <- process_solution(result$solution, as.numeric(input$week), 
-                                      input$objective, input$store)
-        
-        opt_results(list(
-          details = processed$details,
-          total_profit = processed$total_profit,
-          total_sales_units = processed$total_sales_units,
-          total_hr = processed$total_hr
-        ))
       }
       
       incProgress(1, detail = "Complete!")
