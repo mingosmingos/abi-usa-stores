@@ -28,7 +28,7 @@ cat("Semanas disponíveis:", paste(semanas_disponiveis, collapse = ", "), "\n")
 week_id      <- 20
 max_J        <- 50
 max_X        <- 30
-max_iter     <- 5000
+max_iter     <- 3000
 initial_temp <- 5          # SANN: initial temperature
 seed         <- 122
 
@@ -46,8 +46,8 @@ sann_gr <- function(par) {
 # 5. AVALIAÇÃO (SANN MINIMIZES BY DEFAULT → negate profit)
 eval_fn_sann <- function(sol) {
   # Return negative profit so optim minimizes -profit == maximizes profit
-  #-eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
-   -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  -eval_plan_O1(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
+  #-eval_plan_O2(sol, forecasts = forecasts, week_id = week_id, verbose = FALSE)
 }
 
 # 6. SOLUÇÃO INICIAL ALEATÓRIA
@@ -113,7 +113,7 @@ cat("Lucro total: $", round(best_profit, 2), "\n\n")
 
 # 9. DETALHES DO LUCRO
 cat("\n=== DETALHES DO LUCRO POR LOJA/DIA ===\n")
-eval_plan_O2(sann_result$par, forecasts = forecasts, week_id = week_id, verbose = TRUE)
+eval_plan_O1(sann_result$par, forecasts = forecasts, week_id = week_id, verbose = TRUE)
 
 # 10. GUARDAR RESULTADOS
 saveRDS(sann_result, file = paste0("resultado_SANN_O1_semana_", week_id, ".rds"))

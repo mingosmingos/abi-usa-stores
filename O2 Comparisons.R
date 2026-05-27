@@ -1,17 +1,30 @@
 ################################################################################
-# compare_O2_methods.R - Performance comparison: Hill Climbing vs Simulated Annealing
-# Objective O2: Maximize Profit
+# compare_optimizers_O2.R
+# Runs Hill Climbing, Simulated Annealing, and Genetic Algorithm on Objective O2
+# (same week, same bounds, fair evaluation tracking, O2-specific constraints)
+# REQUIREMENTS: hill.R, eval_plan_O2.R, all_store_predictions.csv
+# R packages: GA
 ################################################################################
-rm(list = ls())
+
+# 0. Shared dependencies
 source("hill.R")
-library(dplyr)
-library(ggplot2)
-library(gridExtra)
+source("eval_plan_O2.R")  # Contains eval_plan_O2 & repair_solution_inplace
+library(GA)
 
-# Load evaluation function
-source("eval_plan_O2.R")
+# 1. Shared settings
+WEEK_ID       <- 20
+MAX_UNITS     <- 10000    # O2 hard constraint
+MAX_ITER      <- 300     # evaluations for HC and SANN
+GA_ITER       <- 5       # generations for GA (approx 5000 evals with popSize=100)
+POP_SIZE      <- 10
+SEED          <- 12
 
-# Load forecasts
+# Fixed bounds matching your O2 implementations
+lower <- rep(0, 84)
+upper <- c(rep(50, 28), rep(30, 28), rep(0.30, 28))
+
+# 2. Load forecasts (unified format)
+cat("Loading forecasts...\n")
 raw <- read.csv("all_store_predictions.csv")
 forecasts <- data.frame(
   Store    = raw$Store,
@@ -19,240 +32,189 @@ forecasts <- data.frame(
   Day      = raw$Step,
   Forecast = raw$Num_Customers
 )
+cat("Available weeks:", paste(sort(unique(forecasts$Week_ID)), collapse = ", "), "\n\n")
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-week_id         <- 20
-max_sales_units <- 10000
-max_J           <- 50  # Global limit for O2
-max_X           <- 30  # Global limit for O2
-seed            <- 123
-n_runs          <- 5
-
-store_names <- c("baltimore", "lancaster", "philadelphia", "richmond")
-
-# Simple bounds (O2 doesn't use dynamic limits)
-lower <- rep(0, 84)
-upper <- c(rep(max_J, 28), rep(max_X, 28), rep(0.30, 28))
-
-# ============================================================================
-# HELPER: Extract metrics from a solution
-# ============================================================================
-extract_metrics <- function(sol, forecasts, week_id, max_sales_units) {
-  # Get objective value (O2 maximizes profit)
-  obj_val <- eval_plan_O2(sol, forecasts, week_id, max_sales_units, verbose = FALSE)
-  
-  dim(sol) <- c(4, 7, 3)
-  total_hr <- sum(round(sol[, , 1]) + round(sol[, , 2]))
-  
-  # Calculate profit (simplified estimate)
-  profit <- 0
-  for(s in 1:4) {
-    fc_store <- forecasts[forecasts$Store == store_names[s] & forecasts$Week_ID == week_id, ]
-    for(d in 1:7) {
-      J <- round(sol[s, d, 1])
-      X <- round(sol[s, d, 2])
-      PR <- sol[s, d, 3]
-      C_pred <- fc_store$Forecast[d]
-      max_assisted <- 7 * X + 6 * J
-      A <- min(max_assisted, C_pred)
-      if(A > 0) profit <- profit + A * 15 * (1 - PR)
-    }
+# 3. Shared evaluation wrapper
+# O2 requires repair before profit calculation. Safely apply if available.
+eval_fn_o2 <- function(sol) {
+  if (exists("repair_solution_inplace", mode = "function")) {
+    sol <- repair_solution_inplace(sol, forecasts, WEEK_ID, MAX_UNITS)
   }
-  profit <- profit - sum(c(700, 730, 760, 800))  # Fixed costs
-  
-  return(list(objective = obj_val, hr = total_hr, profit = profit))
+  eval_plan_O2(sol, forecasts = forecasts, week_id = WEEK_ID, 
+               max_sales_units = MAX_UNITS, verbose = FALSE)
 }
 
-# ============================================================================
-# 1. RUN HILL CLIMBING (with convergence tracking)
-# ============================================================================
-run_hill_climbing_tracked <- function(seed_val) {
-  set.seed(seed_val)
-  
-  # Initial solution (heuristic)
-  s0 <- rep(0, 84)
-  dim(s0) <- c(4, 7, 3)
-  for(s in 1:4) {
-    fc_store <- forecasts[forecasts$Store == store_names[s] & forecasts$Week_ID == week_id, ]
-    for(d in 1:7) {
-      C_pred <- fc_store$Forecast[d]
-      X_heur <- floor(C_pred / 7)
-      rest <- C_pred - 7 * X_heur
-      J_heur <- ceiling(rest / 6)
-      s0[s, d, 1] <- min(J_heur, max_J)
-      s0[s, d, 2] <- min(X_heur, max_X)
-      s0[s, d, 3] <- 0.15
-    }
-  }
-  s0 <- c(s0)
-  
-  tracker <- list(iter = 0, history = data.frame(iter = integer(), best_obj = numeric()))
-  
-  change_fn <- function(par, lower, upper) {
-    new_par <- par
-    for(i in 1:length(par)) {
-      if(runif(1) < 0.3) {
-        factor <- rnorm(1, mean = 1, sd = 0.1)
-        new_par[i] <- par[i] * factor
-        new_par[i] <- min(upper[i], max(lower[i], new_par[i]))
-      }
-    }
-    return(new_par)
-  }
-  
-  eval_fn <- function(sol) {
-    val <- eval_plan_O2(sol, forecasts, week_id, max_sales_units, verbose = FALSE)
-    tracker$iter <<- tracker$iter + 1
-    if(tracker$iter %% 100 == 0) {
-      tracker$history <<- rbind(tracker$history, data.frame(iter = tracker$iter, best_obj = val))
-    }
-    return(val)
-  }
-  
-  result <- hclimbing(par = s0, fn = eval_fn, change = change_fn,
-                      lower = lower, upper = upper, type = "max",
-                      control = list(maxit = 5000, REPORT = 0))
-  
-  return(list(solution = result$sol, value = result$value, history = tracker$history,
-              metrics = extract_metrics(result$sol, forecasts, week_id, max_sales_units)))
+# 4. Shared perturbation / neighbourhood generator
+change_fn <- function(par) {
+  hchange(par, lower = lower, upper = upper, operator = "*",
+          dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
 }
 
-# ============================================================================
-# 2. RUN SIMULATED ANNEALING (with convergence tracking)
-# ============================================================================
-run_sann_tracked <- function(seed_val) {
-  set.seed(seed_val)
-  s0 <- runif(84, min = lower, max = upper)
-  
-  tracker <- list(iter = 0, best_val = -Inf, history = data.frame(iter = integer(), best_obj = numeric()))
-  
-  sann_gr <- function(par) {
-    hchange(par, lower = lower, upper = upper, operator = "*",
-            dist = rnorm, mean = 1, sd = 0.05, round = FALSE)
-  }
-  
-  eval_fn <- function(sol) {
-    # SANN minimizes, O2 maximizes, so we negate
-    val <- -eval_plan_O2(sol, forecasts = forecasts, week_id = week_id,
-                         max_sales_units = max_sales_units, verbose = FALSE)
-    tracker$iter <<- tracker$iter + 1
-    
-    if(!is.na(val) && is.finite(val) && val < tracker$best_val) {
-      tracker$best_val <<- val
-      tracker$history <<- rbind(tracker$history, data.frame(iter = tracker$iter, best_obj = -tracker$best_val))
-    }
-    return(val)
-  }
-  
-  result <- optim(par = s0, fn = eval_fn, gr = sann_gr, method = "SANN",
-                  control = list(maxit = 5000, temp = 50, trace = FALSE, tmax = 20))
-  
-  return(list(solution = result$par, value = -result$value, history = tracker$history,
-              metrics = extract_metrics(result$par, forecasts, week_id, max_sales_units)))
+# 5. Hill Climbing
+cat("=== Running Hill Climbing (O2) ===\n")
+set.seed(SEED)
+s0 <- runif(84, min = lower, max = upper)
+
+hc_track_best <- numeric(MAX_ITER)
+hc_iter       <- 0L
+hc_eval_tracked <- function(sol) {
+  val <- eval_fn_o2(sol)
+  hc_iter <<- hc_iter + 1L
+  hc_track_best[hc_iter] <<- if (hc_iter == 1L || val > hc_track_best[hc_iter - 1L]) 
+    val else hc_track_best[hc_iter - 1L]
+  val
 }
 
-# ============================================================================
-# 3. EXECUTE COMPARISON
-# ============================================================================
-cat("Running O2 comparative optimization...\n")
-hc_results <- list()
-sann_results <- list()
-
-for(i in 1:n_runs) {
-  cat(sprintf("Run %d/%d...\n", i, n_runs))
-  hc_results[[i]] <- run_hill_climbing_tracked(seed + i)
-  sann_results[[i]] <- run_sann_tracked(seed + i)
-}
-
-aggregate_metrics <- function(results_list, method_name) {
-  do.call(rbind, lapply(results_list, function(r) {
-    data.frame(
-      Method = method_name,
-      Objective = r$metrics$objective,
-      HR = r$metrics$hr,
-      Profit = r$metrics$profit
-    )
-  }))
-}
-
-final_comparison <- rbind(
-  aggregate_metrics(hc_results, "Hill Climbing"),
-  aggregate_metrics(sann_results, "Simulated Annealing")
+hc_result <- hclimbing(
+  par     = s0,
+  fn      = hc_eval_tracked,
+  change  = function(par, lower, upper) change_fn(par),
+  lower   = lower,
+  upper   = upper,
+  type    = "max",
+  control = list(maxit = MAX_ITER, REPORT = 500, digits = 2)
 )
+hc_best_profit <- hc_result$eval
+hc_curve       <- hc_track_best[seq_len(hc_iter)]
+cat(sprintf("HC best profit:   $%.2f\n\n", hc_best_profit))
 
-# ============================================================================
-# 4. VISUALIZATIONS
-# ============================================================================
-cat("Generating convergence plots...\n")
+# 6. Simulated Annealing
+cat("=== Running Simulated Annealing (O2) ===\n")
+set.seed(SEED)
+s0 <- runif(84, min = lower, max = upper)
 
-# Standardize history columns
-hc_hist <- do.call(rbind, lapply(seq_along(hc_results), function(i) {
-  h <- hc_results[[i]]$history
-  data.frame(Run = i, Method = "Hill Climbing", iter = h$iter, best_obj = h$best_obj)
-}))
+sa_track <- new.env(parent = emptyenv())
+sa_track$iter      <- 0L
+sa_track$best_val  <- numeric(MAX_ITER + 10L)
 
-sann_hist <- do.call(rbind, lapply(seq_along(sann_results), function(i) {
-  s <- sann_results[[i]]$history
-  data.frame(Run = i, Method = "Simulated Annealing", iter = s$iter, best_obj = s$best_obj)
-}))
+# optim() minimizes -> negate O2 profit
+eval_fn_sann <- function(sol) {
+  val <- -eval_fn_o2(sol)
+  i   <- sa_track$iter + 1L
+  sa_track$iter     <- i
+  sa_track$best_val[i] <- if (i == 1L || val < sa_track$best_val[i - 1L]) 
+    val else sa_track$best_val[i - 1L]
+  val
+}
 
-all_history <- rbind(hc_hist, sann_hist)
-avg_conv <- aggregate(best_obj ~ iter + Method, data = all_history, FUN = mean, na.rm = TRUE)
+sann_result <- optim(
+  par     = s0,
+  fn      = eval_fn_sann,
+  gr      = function(par, lower, upper) change_fn(par),
+  method  = "SANN",
+  control = list(maxit = MAX_ITER, temp = 50, tmax = 30, trace = FALSE)
+)
+sa_best_profit <- -sann_result$value
+sa_curve       <- -sa_track$best_val[seq_len(sa_track$iter)]
+cat(sprintf("SANN best profit: $%.2f\n\n", sa_best_profit))
 
-# Plot 1: Convergence
-p1 <- ggplot(avg_conv, aes(x = iter, y = best_obj, color = Method)) +
-  geom_line(linewidth = 1.2) +
-  geom_point(alpha = 0.3) +
-  scale_color_manual(values = c("Hill Climbing" = "#2E86AB", "Simulated Annealing" = "#A23B72")) +
-  labs(title = "O2 Convergence: Objective vs Iterations",
-       x = "Iteration", y = "Objective Value (Profit)", color = "Method") +
-  theme_minimal() + theme(plot.title = element_text(face = "bold", hjust = 0.5))
+# 7. Genetic Algorithm
+cat("=== Running Genetic Algorithm (O2) ===\n")
 
-# Plot 2: Final Metrics
-p2 <- ggplot(final_comparison, aes(x = Method, y = Objective, fill = Method)) +
-  geom_boxplot(alpha = 0.7) +
-  geom_jitter(width = 0.15, alpha = 0.6) +
-  scale_fill_manual(values = c("Hill Climbing" = "#2E86AB", "Simulated Annealing" = "#A23B72")) +
-  labs(title = "O2 Final Objective Values", x = "Method", y = "Profit (USD)") +
-  theme_minimal() + theme(plot.title = element_text(face = "bold", hjust = 0.5), legend.position = "none")
+ga_fitness <- function(sol, ...) {
+  # GA evaluates in parallel batches; repair must be safe for matrix inputs
+  if (is.matrix(sol)) {
+    profit <- numeric(nrow(sol))
+    for(i in seq_len(nrow(sol))) {
+      row_sol <- sol[i, ]
+      if (exists("repair_solution_inplace", mode = "function")) {
+        row_sol <- repair_solution_inplace(row_sol, forecasts, WEEK_ID, MAX_UNITS)
+      }
+      profit[i] <- eval_plan_O2(row_sol, forecasts, WEEK_ID, MAX_UNITS, FALSE)
+    }
+    return(profit)
+  } else {
+    return(eval_fn_o2(sol))
+  }
+}
 
-# Plot 3: HR vs Profit Trade-off
-p3 <- ggplot(final_comparison, aes(x = HR, y = Profit, color = Method, shape = Method)) +
-  geom_point(size = 4, alpha = 0.8) +
-  scale_color_manual(values = c("Hill Climbing" = "#2E86AB", "Simulated Annealing" = "#A23B72")) +
-  labs(title = "O2 Pareto View: HR Usage vs Profit",
-       x = "Total HR Resources (J+X)", y = "Total Profit (USD)",
-       color = "Method", shape = "Method") +
-  theme_minimal() + theme(plot.title = element_text(face = "bold", hjust = 0.5))
+ga_result <- ga(
+  type       = "real-valued",
+  fitness    = ga_fitness,
+  lower      = lower,
+  upper      = upper,
+  popSize    = POP_SIZE,
+  maxiter    <- GA_ITER,
+  pcrossover = 0.8,
+  pmutation  = 0.1,
+  elitism    = 10,
+  run        = 30,       # early stop if no improvement for 30 gens
+  monitor    = FALSE,
+  seed       = SEED
+)
+ga_best_profit <- ga_result@fitnessValue
+ga_curve       <- ga_result@summary[, "max"]
+cat(sprintf("GA   best profit: $%.2f\n\n", ga_best_profit))
 
-grid.arrange(p1, p2, p3, ncol = 1)
+# 8. Comparison Plots
+pdf("optimizer_comparison_O2.pdf", width = 12, height = 10)
+col_hc   <- "#2196F3"
+col_sann <- "#FF9800"
+col_ga   <- "#4CAF50"
 
-ggsave("O2_convergence_comparison.png", p1, width = 10, height = 5, dpi = 300)
-ggsave("O2_final_metrics.png", p2, width = 8, height = 5, dpi = 300)
-ggsave("O2_pareto_comparison.png", p3, width = 10, height = 6, dpi = 300)
+# Plot 1: Convergence curves (normalised to function evaluations)
+ga_evals <- seq(POP_SIZE, by = POP_SIZE, length.out = length(ga_curve))
+x_max    <- max(MAX_ITER, max(ga_evals))
+y_min    <- min(hc_curve[1], sa_curve[1], ga_curve[1])
+y_max    <- max(hc_best_profit, sa_best_profit, ga_best_profit) * 1.05
 
-# ============================================================================
-# 5. SAVE & SUMMARY
-# ============================================================================
-stats_summary <- final_comparison %>%
-  group_by(Method) %>%
-  summarise(
-    `Avg Objective` = sprintf("%.2f ± %.2f", mean(Objective), sd(Objective)),
-    `Avg HR` = sprintf("%.1f ± %.1f", mean(HR), sd(HR)),
-    `Avg Profit` = sprintf("$%.0f ± $%.0f", mean(Profit), sd(Profit)),
-    `Best Objective` = sprintf("%.2f", max(Objective))
-  )
+plot(seq_along(hc_curve), hc_curve,
+     type = "l", col = col_hc, lwd = 2,
+     xlim = c(0, x_max), ylim = c(y_min, y_max),
+     xlab = "Function Evaluations", ylab = "Best Profit Found (USD)",
+     main = paste0("Convergence Comparison - Week ", WEEK_ID, " (O2)"))
+lines(seq_along(sa_curve), sa_curve, col = col_sann, lwd = 2)
+lines(ga_evals, ga_curve, col = col_ga, lwd = 2, lty = 2)
+abline(h = hc_best_profit, col = col_hc, lty = 3, lwd = 1)
+abline(h = sa_best_profit, col = col_sann, lty = 3, lwd = 1)
+abline(h = ga_best_profit, col = col_ga, lty = 3, lwd = 1)
+legend("bottomright",
+       legend = c(
+         sprintf("Hill Climbing  ($%.0f)", hc_best_profit),
+         sprintf("Simul. Annealing ($%.0f)", sa_best_profit),
+         sprintf("Genetic Alg. ($%.0f)", ga_best_profit)
+       ),
+       col = c(col_hc, col_sann, col_ga), lty = c(1, 1, 2), lwd = 2, bg = "white")
+grid()
 
-cat("\n=== O2 STATISTICAL COMPARISON ===\n")
-print(stats_summary)
+# Plot 2: Bar chart - final best profit per algorithm
+profits <- c(hc_best_profit, sa_best_profit, ga_best_profit)
+names(profits) <- c("Hill\nClimbing", "Simulated\nAnnealing", "Genetic\nAlgorithm")
+bp <- barplot(profits, col = c(col_hc, col_sann, col_ga), border = NA,
+              ylim = c(0, max(profits) * 1.15),
+              ylab = "Best Profit (USD)",
+              main = paste0("Final Best Profit - Week ", WEEK_ID, " (O2)"),
+              cex.names = 0.9)
+text(bp, profits + max(profits) * 0.02, labels = sprintf("$%.0f", profits), cex = 0.85, font = 2)
+grid(nx = NA, ny = NULL)
 
-saveRDS(list(
-  hill_climbing = hc_results,
-  simulated_annealing = sann_results,
-  final_comparison = final_comparison,
-  configuration = list(week_id = week_id, n_runs = n_runs)
-), file = "O2_method_comparison_results.rds")
+# Plot 3: GA - fitness distribution across final population
+final_pop_fitness <- apply(ga_result@population, 1, ga_fitness)
+hist(final_pop_fitness, col = adjustcolor(col_ga, 0.6), border = "white", breaks = 20,
+     xlab = "Profit (USD)", main = paste0("GA Final Population - Fitness Distribution\nWeek ", WEEK_ID, " (O2)"),
+     freq = TRUE)
+abline(v = ga_best_profit, col = "red", lwd = 2, lty = 2)
+legend("topleft", legend = sprintf("Best: $%.0f", ga_best_profit), col = "red", lty = 2, lwd = 2, bg = "white")
+grid()
 
-cat("\n✓ O2 comparison complete! Results saved.\n")
+# Plot 4: SANN - best-so-far vs rolling average
+window_size <- max(1L, as.integer(MAX_ITER / 100))
+sa_rolling  <- stats::filter(sa_curve, rep(1 / window_size, window_size), sides = 1)
+plot(seq_along(sa_curve), sa_curve, type = "l", col = col_sann, lwd = 2,
+     xlab = "Iteration", ylab = "Profit (USD)", main = "SANN - Best-so-far vs Rolling Average")
+lines(seq_along(sa_rolling), sa_rolling, col = "grey40", lwd = 1.5, lty = 2)
+legend("bottomright", legend = c("Best so far", sprintf("Rolling avg (%d iters)", window_size)),
+       col = c(col_sann, "grey40"), lty = c(1, 2), lwd = 2, bg = "white")
+grid()
+dev.off()
+
+# 9. Summary table
+cat("\n========== COMPARISON SUMMARY (O2) ==========\n")
+cat(sprintf("  %-22s  %12s  %12s\n", "Algorithm", "Best Profit", "Evaluations"))
+cat(sprintf("  %-22s  %12s  %12s\n", "---------", "-----------", "-----------"))
+cat(sprintf("  %-22s  $%11.2f  %12d\n", "Hill Climbing",       hc_best_profit,  length(hc_curve)))
+cat(sprintf("  %-22s  $%11.2f  %12d\n", "Simulated Annealing", sa_best_profit,  length(sa_curve)))
+cat(sprintf("  %-22s  $%11.2f  %12d\n", "Genetic Algorithm",   ga_best_profit,  max(ga_evals)))
+cat("=========================================\n")
+cat("\nPlots saved to: optimizer_comparison_O2.pdf\n")
+cat("\n=== O2 COMPARISON COMPLETE ===\n")

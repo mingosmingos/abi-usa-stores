@@ -25,7 +25,7 @@ semanas_disponiveis <- sort(unique(forecasts$Week_ID))
 cat("Semanas disponíveis:", paste(semanas_disponiveis, collapse = ", "), "\n")
 
 # 2. CONFIGURAÇÕES
-week_id      <- 21
+week_id      <- 20
 max_J        <- 50
 max_X        <- 30
 max_iter     <- 5000
